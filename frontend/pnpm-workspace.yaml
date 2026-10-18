@@ -1,0 +1,4 @@
+allowBuilds:
+  esbuild: true
+  vue-demi: true
+# pnpm 12 起，onlyBuiltDependencies 等设置从 package.json 迁移到本文件

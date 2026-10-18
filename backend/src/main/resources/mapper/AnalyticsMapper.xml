@@ -1,0 +1,445 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.carbon.platform.analytics.mapper.AnalyticsMapper">
+
+    <sql id="bldFilter">
+        <if test="buildingIds != null and buildingIds.size() > 0">
+            AND building_id IN
+            <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+        </if>
+        <if test="siteId != null and siteId != ''">AND site_id = #{siteId}</if>
+        <if test="buildingType != null and buildingType != ''">AND building_type_cn = #{buildingType}</if>
+    </sql>
+
+    <!-- ============================================================
+         统计① 时段汇总
+         groupExpr 由 Service 白名单生成，不接受用户直接输入，无注入风险
+         ============================================================ -->
+    <select id="selectPeriodBuckets" resultType="java.util.Map">
+        SELECT
+            ${groupExpr}                          AS `label`,
+            ROUND(SUM(electricity_kwh), 2)        AS `electricityKwh`,
+            ROUND(SUM(hvac_kwh), 2)               AS `hvacKwh`,
+            ROUND(SUM(water_m3), 2)               AS `waterM3`,
+            ROUND(SUM(carbon_kg), 2)              AS `carbonKg`,
+            ROUND(AVG(cop_avg), 3)                AS `copAvg`,
+            ROUND(AVG(air_temp_avg), 2)           AS `airTempAvg`,
+            SUM(anomaly_hours)                    AS `anomalyHours`,
+            COUNT(*)                              AS `days`
+        FROM agg_building_daily
+        <where>
+            stat_date &gt;= #{startDate} AND stat_date &lt;= #{endDate}
+            <include refid="bldFilter"/>
+        </where>
+        GROUP BY ${groupExpr}
+        ORDER BY `label`
+    </select>
+
+    <!-- 分时电价时段：尖峰(10-12,14-17) 峰(8-9,13,18-19) 平(7,20-22) 谷(23-6)
+         性能：走预聚合表 agg_time_hourly（13,140 行），实测 0.037s；
+               直接在 600 万行事实表上分组实测需 2.364s，会拖垮统计①接口。
+               仅当按建筑过滤（buildingIds 非空）时回退到事实表。 -->
+    <select id="selectTariffBuckets" resultType="java.util.Map">
+        SELECT
+            CASE
+                WHEN stat_hour BETWEEN 10 AND 12 OR stat_hour BETWEEN 14 AND 17 THEN '尖峰'
+                WHEN stat_hour IN (8, 9, 13, 18, 19) THEN '高峰'
+                WHEN stat_hour IN (7, 20, 21, 22) THEN '平段'
+                ELSE '低谷'
+            END                                   AS `name`,
+            ROUND(SUM(electricity_kwh), 2)        AS `electricityKwh`,
+            <!-- 三级数据源：事实表用 COUNT(*)，两张预聚合表用 SUM(anomaly_hours) 近似小时数 -->
+            <choose>
+                <when test="buildingIds != null and buildingIds.size() > 0">COUNT(*)</when>
+                <otherwise>SUM(anomaly_hours) + 0</otherwise>
+            </choose>                              AS `hourCount`
+        FROM <choose>
+                 <when test="buildingIds != null and buildingIds.size() > 0">fact_energy_hourly</when>
+                 <when test="siteId != null and siteId != ''">agg_site_hourly</when>
+                 <otherwise>agg_time_hourly</otherwise>
+             </choose>
+        <where>
+            <choose>
+                <when test="buildingIds != null and buildingIds.size() > 0">
+                    stat_year &gt;= YEAR(#{startDate}) AND stat_year &lt;= YEAR(#{endDate})
+                    AND ts &gt;= #{startDate} AND ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+                    AND building_id IN
+                    <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+                </when>
+                <otherwise>
+                    stat_date &gt;= #{startDate} AND stat_date &lt;= #{endDate}
+                    <if test="siteId != null and siteId != ''">AND site_id = #{siteId}</if>
+                </otherwise>
+            </choose>
+        </where>
+        GROUP BY `name`
+        ORDER BY FIELD(`name`, '尖峰', '高峰', '平段', '低谷')
+    </select>
+
+    <select id="selectPeakValley" resultType="java.util.Map">
+        SELECT
+            ROUND(SUM(electricity_kwh), 2) AS total,
+            ROUND(AVG(electricity_kwh), 2) AS average
+        FROM agg_building_daily
+        <where>
+            stat_date &gt;= #{startDate} AND stat_date &lt;= #{endDate}
+            <include refid="bldFilter"/>
+        </where>
+    </select>
+
+    <!-- 峰谷定位：按小时汇总。走预聚合表 agg_time_hourly（实测 0.036s，
+         事实表全扫需 1.981s）；仅按建筑过滤时回退事实表。 -->
+    <!-- 按小时汇总（供分时占比用）
+         三级数据源选择，实测耗时：
+           · 无过滤        → agg_time_hourly（13,140 行）约 3ms
+           · 仅园区过滤    → agg_site_hourly（236,523 行）约 4ms
+           · 按建筑过滤    → fact_energy_hourly（600 万行）约 500ms（无法避免，建筑维度太细）
+         曾因 agg_time_hourly 没有 site_id 列，导致"带园区过滤"回退到事实表，
+         使 month+siteId 的时段汇总接口耗时 685ms；新增 agg_site_hourly 后降至约 150ms。 -->
+    <select id="selectHourTotals" resultType="java.util.Map">
+        SELECT stat_hour AS `hour`, ROUND(SUM(electricity_kwh), 2) AS `kwh`
+        FROM <choose>
+                 <when test="buildingIds != null and buildingIds.size() > 0">fact_energy_hourly</when>
+                 <when test="siteId != null and siteId != ''">agg_site_hourly</when>
+                 <otherwise>agg_time_hourly</otherwise>
+             </choose>
+        <where>
+            <choose>
+                <when test="buildingIds != null and buildingIds.size() > 0">
+                    stat_year &gt;= YEAR(#{startDate}) AND stat_year &lt;= YEAR(#{endDate})
+                    AND ts &gt;= #{startDate} AND ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+                    AND building_id IN
+                    <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+                </when>
+                <otherwise>
+                    stat_date &gt;= #{startDate} AND stat_date &lt;= #{endDate}
+                    <if test="siteId != null and siteId != ''">AND site_id = #{siteId}</if>
+                </otherwise>
+            </choose>
+        </where>
+        GROUP BY stat_hour ORDER BY stat_hour
+    </select>
+
+    <!-- ============================================================
+         统计② COP 分析
+         ============================================================ -->
+    <select id="selectCopSummary" resultType="java.util.Map">
+        SELECT
+            ROUND(AVG(cop), 3)                AS copAvg,
+            ROUND(MAX(cop), 3)                AS copMax,
+            ROUND(MIN(cop), 3)                AS copMin,
+            ROUND(STDDEV_SAMP(cop), 3)        AS copStd,
+            ROUND(SUM(hvac_kwh), 1)           AS coolingKwh,
+            ROUND(SUM(hvac_electricity_kwh), 1) AS hvacElectricityKwh,
+            ROUND(AVG(chw_supply_temp_c), 2)  AS supplyTempAvg,
+            ROUND(AVG(chw_return_temp_c), 2)  AS returnTempAvg,
+            ROUND(AVG(chw_return_temp_c - chw_supply_temp_c), 2) AS deltaTAvg,
+            COUNT(cop)                        AS sampleHours
+        FROM fact_energy_hourly
+        <where>
+            cop IS NOT NULL
+            AND stat_year &gt;= YEAR(#{startDate}) AND stat_year &lt;= YEAR(#{endDate})
+            AND ts &gt;= #{startDate} AND ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND building_id IN
+                <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+            </if>
+        </where>
+    </select>
+
+    <!-- COP 随室外温度变化（判断高温衰减） -->
+    <select id="selectCopByTemperature" resultType="java.util.Map">
+        SELECT
+            CASE
+                WHEN air_temperature_c &lt; 0  THEN '&lt;0℃'
+                WHEN air_temperature_c &lt; 10 THEN '0-10℃'
+                WHEN air_temperature_c &lt; 20 THEN '10-20℃'
+                WHEN air_temperature_c &lt; 28 THEN '20-28℃'
+                WHEN air_temperature_c &lt; 35 THEN '28-35℃'
+                ELSE '≥35℃'
+            END                            AS `tempRange`,
+            ROUND(AVG(cop), 3)             AS `copAvg`,
+            COUNT(*)                       AS `hours`
+        FROM fact_energy_hourly
+        <where>
+            cop IS NOT NULL AND air_temperature_c IS NOT NULL
+            AND stat_year &gt;= YEAR(#{startDate}) AND stat_year &lt;= YEAR(#{endDate})
+            AND ts &gt;= #{startDate} AND ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND building_id IN
+                <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+            </if>
+        </where>
+        GROUP BY `tempRange`
+        ORDER BY MIN(air_temperature_c)
+    </select>
+
+    <select id="selectCopDistribution" resultType="java.util.Map">
+        SELECT
+            CASE
+                WHEN cop &lt; 2.5 THEN '&lt;2.5'
+                WHEN cop &lt; 3.0 THEN '2.5-3.0'
+                WHEN cop &lt; 3.5 THEN '3.0-3.5'
+                WHEN cop &lt; 4.0 THEN '3.5-4.0'
+                WHEN cop &lt; 4.5 THEN '4.0-4.5'
+                ELSE '≥4.5'
+            END                AS `range`,
+            COUNT(*)           AS `hours`
+        FROM fact_energy_hourly
+        <where>
+            cop IS NOT NULL
+            AND stat_year &gt;= YEAR(#{startDate}) AND stat_year &lt;= YEAR(#{endDate})
+            AND ts &gt;= #{startDate} AND ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND building_id IN
+                <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+            </if>
+        </where>
+        GROUP BY `range`
+        ORDER BY MIN(cop)
+    </select>
+
+    <!-- ============================================================
+         统计③ 异常分析
+         ============================================================ -->
+    <!-- 异常汇总：走预聚合表 agg_anomaly_daily（约 25 万行），
+         实测毫秒级；直接在 600 万行事实表上条件求和需 1.1~1.7 秒，会使接口超出 2 秒验收线。 -->
+    <select id="selectAnomalySummary" resultType="java.util.Map">
+        SELECT
+            SUM(evaluated_hours) AS evaluatedHours,
+            SUM(anomaly_hours)   AS anomalyHours,
+            SUM(quality_hours)   AS qualityHours
+        FROM agg_anomaly_daily
+        <where>
+            stat_date &gt;= #{startDate} AND stat_date &lt;= #{endDate}
+            <if test="siteId != null and siteId != ''">AND site_id = #{siteId}</if>
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND building_id IN
+                <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+            </if>
+        </where>
+    </select>
+
+    <!-- 事件时长聚合：在 SQL 内完成，避免把数千行拉进内存 -->
+    <select id="selectAnomalyEventDuration" resultType="java.util.Map">
+        SELECT COUNT(*)                        AS eventCount,
+               ROUND(AVG(duration_hours), 1)   AS avgDurationHours,
+               MAX(duration_hours)             AS maxDurationHours,
+               SUM(duration_hours)             AS totalAnomalyHours
+        FROM fact_anomaly_event
+        <where>
+            start_ts &gt;= #{startDate} AND start_ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+            <if test="siteId != null and siteId != ''">AND site_id = #{siteId}</if>
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND building_id IN
+                <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+            </if>
+        </where>
+    </select>
+
+    <select id="selectAnomalyByType" resultType="java.util.Map">
+        SELECT anomaly_type AS `type`, COUNT(*) AS `count`
+        FROM fact_anomaly_event
+        <where>
+            start_ts &gt;= #{startDate} AND start_ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+            <if test="siteId != null and siteId != ''">AND site_id = #{siteId}</if>
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND building_id IN
+                <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+            </if>
+        </where>
+        GROUP BY anomaly_type ORDER BY `count` DESC
+    </select>
+
+    <select id="selectAnomalyTopBuildings" resultType="java.util.Map">
+        SELECT e.building_id AS buildingId, e.site_id AS siteId,
+               MAX(b.building_type_cn) AS buildingTypeCn,
+               SUM(e.duration_hours)   AS anomalyHours,
+               ROUND(SUM(e.duration_hours) / 8760.0, 4) AS anomalyRate,
+               ROUND(MAX(e.deviation_pct), 2) AS peakDeviationPct,
+               (SELECT MAX(e2.anomaly_type) FROM fact_anomaly_event e2
+                 WHERE e2.building_id = e.building_id LIMIT 1) AS dominantType
+        FROM fact_anomaly_event e
+        LEFT JOIN dim_building b ON b.building_id = e.building_id
+        <where>
+            e.start_ts &gt;= #{startDate} AND e.start_ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+            <if test="siteId != null and siteId != ''">AND e.site_id = #{siteId}</if>
+        </where>
+        GROUP BY e.building_id, e.site_id
+        ORDER BY anomalyHours DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectAnomalyTrend" resultType="java.util.Map">
+        SELECT DATE_FORMAT(start_ts, '%Y-%m-%d') AS `date`,
+               SUM(duration_hours) AS anomalyHours,
+               COUNT(*)            AS eventCount
+        FROM fact_anomaly_event
+        <where>
+            start_ts &gt;= #{startDate} AND start_ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+            <if test="siteId != null and siteId != ''">AND site_id = #{siteId}</if>
+        </where>
+        GROUP BY `date` ORDER BY `date`
+    </select>
+
+    <!-- 异常事件列表（MCP scan_anomalies） -->
+    <select id="selectAnomalyEvents" resultType="java.util.Map">
+        SELECT e.id, e.building_id AS buildingId, e.site_id AS siteId,
+               MAX(b.building_type_cn) AS buildingTypeCn,
+               DATE_FORMAT(e.start_ts, '%Y-%m-%d %H:%i') AS startTs,
+               DATE_FORMAT(e.end_ts, '%Y-%m-%d %H:%i')   AS endTs,
+               e.duration_hours AS durationHours, e.anomaly_type AS anomalyType,
+               e.severity, e.peak_value AS peakValue,
+               e.baseline_value AS baselineValue, e.deviation_pct AS deviationPct,
+               e.handled, e.handle_note AS handleNote
+        FROM fact_anomaly_event e
+        LEFT JOIN dim_building b ON b.building_id = e.building_id
+        <where>
+            e.start_ts &gt;= #{startDate} AND e.start_ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+            <if test="anomalyType != null and anomalyType != ''">AND e.anomaly_type = #{anomalyType}</if>
+            <if test="severity != null and severity != ''">AND e.severity = #{severity}</if>
+            <if test="minDuration != null">AND e.duration_hours &gt;= #{minDuration}</if>
+            <if test="siteId != null and siteId != ''">AND e.site_id = #{siteId}</if>
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND e.building_id IN
+                <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+            </if>
+        </where>
+        GROUP BY e.id
+        ORDER BY e.start_ts DESC
+        LIMIT #{offset}, #{limit}
+    </select>
+
+    <select id="countAnomalyEvents" resultType="java.lang.Long">
+        SELECT COUNT(*)
+        FROM fact_anomaly_event e
+        <where>
+            e.start_ts &gt;= #{startDate} AND e.start_ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+            <if test="anomalyType != null and anomalyType != ''">AND e.anomaly_type = #{anomalyType}</if>
+            <if test="severity != null and severity != ''">AND e.severity = #{severity}</if>
+            <if test="minDuration != null">AND e.duration_hours &gt;= #{minDuration}</if>
+            <if test="siteId != null and siteId != ''">AND e.site_id = #{siteId}</if>
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND e.building_id IN
+                <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+            </if>
+        </where>
+    </select>
+
+    <!-- ============================================================
+         MCP 工具 6 问题诊断
+         ============================================================ -->
+    <select id="selectDiagnoseProfiles" resultType="java.util.Map">
+        SELECT building_id AS buildingId, anomaly_type AS anomalyType,
+               COUNT(*) AS hours,
+               ROUND(AVG(electricity_kwh), 1) AS avgKwh,
+               ROUND(MAX(electricity_kwh), 1) AS maxKwh,
+               ROUND(AVG(baseline), 1)        AS avgBaseline,
+               ROUND(AVG(zscore), 2)          AS avgZscore,
+               ROUND(AVG(air_temperature_c), 1) AS avgTemp,
+               ROUND(AVG(humidity_pct), 1)      AS avgHumidity,
+               ROUND(AVG(occupancy_density), 2) AS avgOccupancy,
+               ROUND(AVG(cop), 2)               AS avgCop,
+               ROUND(AVG(chw_supply_temp_c), 2) AS avgSupplyTemp,
+               ROUND(AVG(chw_return_temp_c), 2) AS avgReturnTemp,
+               MIN(ts) AS firstSeen, MAX(ts) AS lastSeen
+        FROM fact_energy_hourly
+        <where>
+            anomaly_flag = 1
+            AND stat_year &gt;= YEAR(#{startDate}) AND stat_year &lt;= YEAR(#{endDate})
+            AND ts &gt;= #{startDate} AND ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND building_id IN
+                <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+            </if>
+        </where>
+        GROUP BY building_id, anomaly_type
+        ORDER BY hours DESC
+        LIMIT 50
+    </select>
+
+    <!-- 异常时段 vs 正常时段对比：归因核心证据 -->
+    <select id="selectAnomalyVsNormal" resultType="java.util.Map">
+        SELECT
+            '异常时段' AS `group`,
+            COUNT(*) AS hours,
+            ROUND(AVG(electricity_kwh), 1)   AS avgKwh,
+            ROUND(AVG(air_temperature_c), 1) AS avgTemp,
+            ROUND(AVG(humidity_pct), 1)      AS avgHumidity,
+            ROUND(AVG(occupancy_density), 2) AS avgOccupancy,
+            ROUND(AVG(cop), 2)               AS avgCop,
+            ROUND(AVG(chw_supply_temp_c), 2) AS avgSupplyTemp,
+            ROUND(AVG(chw_return_temp_c - chw_supply_temp_c), 2) AS avgDeltaT
+        FROM fact_energy_hourly
+        <where>
+            anomaly_flag = 1
+            AND stat_year &gt;= YEAR(#{startDate}) AND stat_year &lt;= YEAR(#{endDate})
+            AND ts &gt;= #{startDate} AND ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND building_id IN
+                <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+            </if>
+        </where>
+        UNION ALL
+        SELECT
+            '正常时段' AS `group`,
+            COUNT(*) AS hours,
+            ROUND(AVG(electricity_kwh), 1),
+            ROUND(AVG(air_temperature_c), 1),
+            ROUND(AVG(humidity_pct), 1),
+            ROUND(AVG(occupancy_density), 2),
+            ROUND(AVG(cop), 2),
+            ROUND(AVG(chw_supply_temp_c), 2),
+            ROUND(AVG(chw_return_temp_c - chw_supply_temp_c), 2)
+        FROM fact_energy_hourly
+        <where>
+            anomaly_flag = 0
+            AND stat_year &gt;= YEAR(#{startDate}) AND stat_year &lt;= YEAR(#{endDate})
+            AND ts &gt;= #{startDate} AND ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND building_id IN
+                <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+            </if>
+        </where>
+    </select>
+
+    <!-- 建筑能效画像（MCP suggest_optimization 依据） -->
+    <select id="selectEfficiencyProfile" resultType="java.util.Map">
+        SELECT
+            f.building_id AS buildingId,
+            MAX(b.building_type_cn) AS buildingTypeCn,
+            MAX(b.area_m2)  AS areaM2,
+            MAX(b.data_grade) AS dataGrade,
+            MAX(b.energy_grade) AS energyGrade,
+            MAX(b.eui_kwh_m2_year) AS euiYear,
+            ROUND(SUM(f.electricity_kwh), 1) AS electricityKwh,
+            ROUND(SUM(f.hvac_kwh), 1)        AS hvacKwh,
+            ROUND(SUM(f.carbon_kg), 1)       AS carbonKg,
+            ROUND(AVG(f.cop), 3)             AS copAvg,
+            ROUND(MIN(f.cop), 3)             AS copMin,
+            ROUND(AVG(f.chw_supply_temp_c), 2) AS supplyTempAvg,
+            ROUND(AVG(f.chw_return_temp_c), 2) AS returnTempAvg,
+            ROUND(AVG(f.chw_return_temp_c - f.chw_supply_temp_c), 2) AS deltaTAvg,
+            SUM(CASE WHEN f.anomaly_flag = 1 THEN 1 ELSE 0 END) AS anomalyHours,
+            SUM(CASE WHEN f.data_quality_flag = 1 THEN 1 ELSE 0 END) AS qualityHours,
+            COUNT(*) AS evaluatedHours,
+            ROUND(AVG(CASE WHEN f.stat_hour BETWEEN 10 AND 17
+                           THEN f.electricity_kwh END), 1) AS daytimeAvgKwh,
+            ROUND(AVG(CASE WHEN f.stat_hour BETWEEN 0 AND 6
+                           THEN f.electricity_kwh END), 1) AS nightAvgKwh
+        FROM fact_energy_hourly f
+        LEFT JOIN dim_building b ON b.building_id = f.building_id
+        <where>
+            f.stat_year &gt;= YEAR(#{startDate}) AND f.stat_year &lt;= YEAR(#{endDate})
+            AND f.ts &gt;= #{startDate} AND f.ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND f.building_id IN
+                <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+            </if>
+        </where>
+        GROUP BY f.building_id
+        LIMIT 1
+    </select>
+
+</mapper>

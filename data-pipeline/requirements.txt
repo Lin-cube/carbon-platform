@@ -1,0 +1,26 @@
+# 碳能智控运维平台 —— 数据管道依赖
+# 安装：见 docs/环境搭建说明.md
+#
+# ⚠️ macOS 环境注意事项（本项目实测踩坑）：
+#   不要用 DSH 内置 Python 创建 venv。内置 Python 由特定 Team ID 签名，
+#   而 pypi/镜像安装的 C 扩展（numpy/pyarrow 的 .so）签名不同，
+#   macOS 会拒绝加载，报 "different Team IDs"。
+#   正确做法：用 Homebrew Python 创建项目 venv：
+#     /opt/homebrew/bin/python3 -m venv .venv
+#
+# ⚠️ 网络：pypi.org 在本机不可达（15s 超时），必须用国内镜像。
+#   项目内已提供 data-pipeline/pip.conf（清华源），用法：
+#     export PIP_CONFIG_FILE=$PWD/data-pipeline/pip.conf && pip install ...
+
+# 数据管道实际用到的（按 grep 核对过引用）
+pandas>=2.2
+numpy>=1.26
+pyarrow>=15.0
+SQLAlchemy>=2.0
+PyMySQL>=1.1
+
+# 已移除（声明但零引用）：
+#   scipy        —— 异常检测用的是 numpy + pandas 的 rolling 分位数，不需要 scipy
+#   openpyxl     —— 管道只导出 CSV/Parquet/JSON；Excel 导出由后端 EasyExcel 负责
+#   fastapi      —— AI 服务由角色 B 的独立 Python 工程实现，不属于本管道
+#   uvicorn      —— 同上

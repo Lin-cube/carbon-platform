@@ -1,0 +1,351 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.carbon.platform.energy.mapper.EnergyQueryMapper">
+
+    <!-- ============================================================
+         公共条件片段
+         ============================================================ -->
+
+    <!-- 建筑筛选：buildingIds / siteId / buildingType 三选多 -->
+    <sql id="buildingFilter">
+        <if test="buildingIds != null and buildingIds.size() > 0">
+            AND building_id IN
+            <foreach collection="buildingIds" item="bid" open="(" separator="," close=")">#{bid}</foreach>
+        </if>
+        <if test="siteId != null and siteId != ''">
+            AND site_id = #{siteId}
+        </if>
+        <if test="buildingType != null and buildingType != ''">
+            AND building_type_cn = #{buildingType}
+        </if>
+    </sql>
+
+    <!-- ============================================================
+         1. 维度枚举（MCP query_dimensions）
+         ============================================================ -->
+    <select id="selectDimensionOptions" resultType="com.carbon.platform.energy.dto.DimensionVO$Option">
+        <choose>
+            <when test="dimension == 'building'">
+                SELECT building_id AS value, CONCAT(building_type_cn, ' · ', building_id) AS label,
+                       1 AS count
+                FROM dim_building ORDER BY building_id LIMIT 2000
+            </when>
+            <when test="dimension == 'site'">
+                SELECT b.site_id AS value, CONCAT(b.site_id, '（', COUNT(*), ' 栋）') AS label,
+                       COUNT(*) AS count
+                FROM dim_building b GROUP BY b.site_id ORDER BY count DESC
+            </when>
+            <when test="dimension == 'building_type'">
+                SELECT building_type_cn AS value, building_type_cn AS label, COUNT(*) AS count
+                FROM dim_building WHERE building_type_cn IS NOT NULL
+                GROUP BY building_type_cn ORDER BY count DESC
+            </when>
+            <when test="dimension == 'data_grade'">
+                SELECT data_grade AS value,
+                       CASE data_grade WHEN 'A' THEN 'A 级 · 建筑独立计量'
+                                       ELSE 'B 级 · 站点分摊估算' END AS label,
+                       COUNT(*) AS count
+                FROM dim_building GROUP BY data_grade
+            </when>
+            <when test="dimension == 'energy_grade'">
+                SELECT energy_grade AS value, CONCAT('能耗评级 ', energy_grade) AS label,
+                       COUNT(*) AS count
+                FROM dim_building WHERE energy_grade IS NOT NULL
+                GROUP BY energy_grade ORDER BY energy_grade
+            </when>
+            <when test="dimension == 'anomaly_type'">
+                SELECT anomaly_type AS value, anomaly_type AS label, COUNT(*) AS count
+                FROM fact_anomaly_event GROUP BY anomaly_type ORDER BY count DESC
+            </when>
+            <when test="dimension == 'season'">
+                SELECT season AS value, season AS label, COUNT(*) AS count
+                FROM agg_building_daily WHERE season IS NOT NULL
+                GROUP BY season ORDER BY count DESC
+            </when>
+            <when test="dimension == 'metric'">
+                SELECT 'electricity_kwh' AS value, '电力能耗 (kWh)' AS label, 1 AS count
+                UNION ALL SELECT 'hvac_kwh', '空调系统能耗 (kWh)', 1
+                UNION ALL SELECT 'water_m3', '水耗 (m³)', 1
+                UNION ALL SELECT 'carbon_kg', '碳排放 (kgCO₂)', 1
+                UNION ALL SELECT 'cop', '机组 COP', 1
+            </when>
+            <otherwise>
+                SELECT 'building' AS value, '建筑' AS label, 1 AS count
+                UNION ALL SELECT 'site', '园区', 1
+                UNION ALL SELECT 'building_type', '建筑类型', 1
+                UNION ALL SELECT 'data_grade', '数据分级', 1
+                UNION ALL SELECT 'energy_grade', '能耗评级', 1
+                UNION ALL SELECT 'anomaly_type', '异常类型', 1
+                UNION ALL SELECT 'season', '季节', 1
+                UNION ALL SELECT 'metric', '统计参数', 1
+            </otherwise>
+        </choose>
+    </select>
+
+    <!-- ============================================================
+         2. 概览统计（MCP overview_stats）
+         走预聚合表 agg_building_daily，实测 0.03s
+         ============================================================ -->
+    <select id="selectOverview" resultType="com.carbon.platform.energy.dto.OverviewVO">
+        SELECT
+            COUNT(DISTINCT d.building_id)      AS buildingCount,
+            COUNT(DISTINCT d.site_id)          AS siteCount,
+            COUNT(*) * 24                      AS totalHours,
+            ROUND(SUM(d.electricity_kwh), 1)   AS electricityKwh,
+            ROUND(SUM(d.hvac_kwh), 1)          AS hvacKwh,
+            ROUND(SUM(d.water_m3), 1)          AS waterM3,
+            ROUND(SUM(d.carbon_kg), 1)         AS carbonKg,
+            ROUND(AVG(d.cop_avg), 3)           AS copAvg,
+            SUM(d.anomaly_hours)               AS anomalyHours,
+            ROUND(SUM(d.anomaly_hours) / NULLIF(COUNT(*) * 24, 0), 4) AS anomalyRate,
+            CONCAT(MIN(d.stat_date), ' ~ ', MAX(d.stat_date)) AS timeRange
+        FROM agg_building_daily d
+        <where>
+            <if test="startDate != null">AND d.stat_date &gt;= #{startDate}</if>
+            <if test="endDate != null">AND d.stat_date &lt;= #{endDate}</if>
+            <if test="siteId != null and siteId != ''">AND d.site_id = #{siteId}</if>
+            <if test="buildingId != null and buildingId != ''">AND d.building_id = #{buildingId}</if>
+        </where>
+    </select>
+
+    <!-- ============================================================
+         3. 分解统计（MCP breakdown_stats）
+         ============================================================ -->
+
+    <!-- metric 表达式复用片段 -->
+    <sql id="metricExpr">
+        <choose>
+            <when test="metric == 'hvac'">SUM(d.hvac_kwh)</when>
+            <when test="metric == 'water'">SUM(d.water_m3)</when>
+            <when test="metric == 'carbon'">SUM(d.carbon_kg)</when>
+            <when test="metric == 'cop'">AVG(d.cop_avg)</when>
+            <otherwise>SUM(d.electricity_kwh)</otherwise>
+        </choose>
+    </sql>
+
+    <select id="selectBreakdownBySite" resultType="java.util.Map">
+        SELECT d.site_id AS `key`, d.site_id AS `label`,
+               ROUND(<include refid="metricExpr"/>, 3) AS `value`,
+               COUNT(DISTINCT d.building_id) AS `count`
+        FROM agg_building_daily d
+        <where>
+            <if test="startDate != null">AND d.stat_date &gt;= #{startDate}</if>
+            <if test="endDate != null">AND d.stat_date &lt;= #{endDate}</if>
+        </where>
+        GROUP BY d.site_id ORDER BY `value` DESC
+    </select>
+
+    <select id="selectBreakdownByType" resultType="java.util.Map">
+        SELECT m.building_type_cn AS `key`, m.building_type_cn AS `label`,
+               ROUND(<include refid="metricExpr"/>, 3) AS `value`,
+               COUNT(DISTINCT d.building_id) AS `count`
+        FROM agg_building_daily d
+        JOIN agg_building_monthly m
+          ON m.building_id = d.building_id AND m.stat_year = d.stat_year AND m.stat_month = d.stat_month
+        <where>
+            <if test="startDate != null">AND d.stat_date &gt;= #{startDate}</if>
+            <if test="endDate != null">AND d.stat_date &lt;= #{endDate}</if>
+        </where>
+        GROUP BY m.building_type_cn ORDER BY `value` DESC
+    </select>
+
+    <select id="selectBreakdownBySeason" resultType="java.util.Map">
+        SELECT d.season AS `key`, d.season AS `label`,
+               ROUND(<include refid="metricExpr"/>, 3) AS `value`, COUNT(*) AS `count`
+        FROM agg_building_daily d
+        <where>
+            d.season IS NOT NULL
+            <if test="startDate != null">AND d.stat_date &gt;= #{startDate}</if>
+            <if test="endDate != null">AND d.stat_date &lt;= #{endDate}</if>
+        </where>
+        GROUP BY d.season ORDER BY `value` DESC
+    </select>
+
+    <!-- 时段汇总：按小时分解。
+         性能：走预聚合表 agg_time_hourly（13,140 行，实测 0.037s）；
+               直接在 600 万行事实表上分组实测需 1.185s。 -->
+    <select id="selectBreakdownByHour" resultType="java.util.Map">
+        SELECT stat_hour AS `key`, CONCAT(LPAD(stat_hour, 2, '0'), ':00') AS `label`,
+               ROUND(<choose>
+                   <when test="metric == 'hvac'">SUM(hvac_kwh)</when>
+                   <when test="metric == 'water'">SUM(water_m3)</when>
+                   <when test="metric == 'carbon'">SUM(carbon_kg)</when>
+                   <when test="metric == 'cop'">AVG(cop_sum / NULLIF(cop_cnt, 0))</when>
+                   <otherwise>SUM(electricity_kwh)</otherwise>
+               </choose>, 3) AS `value`,
+               COUNT(*) AS `count`
+        FROM agg_time_hourly
+        <where>
+            <if test="startDate != null">AND stat_date &gt;= #{startDate}</if>
+            <if test="endDate != null">AND stat_date &lt;= #{endDate}</if>
+        </where>
+        GROUP BY stat_hour ORDER BY stat_hour
+    </select>
+
+    <select id="selectBreakdownByGrade" resultType="java.util.Map">
+        SELECT b.data_grade AS `key`,
+               CASE b.data_grade WHEN 'A' THEN 'A 级 · 建筑独立计量'
+                                 ELSE 'B 级 · 站点分摊估算' END AS `label`,
+               ROUND(<include refid="metricExpr"/>, 3) AS `value`,
+               COUNT(DISTINCT d.building_id) AS `count`
+        FROM agg_building_daily d
+        JOIN dim_building b ON b.building_id = d.building_id
+        <where>
+            <if test="startDate != null">AND d.stat_date &gt;= #{startDate}</if>
+            <if test="endDate != null">AND d.stat_date &lt;= #{endDate}</if>
+        </where>
+        GROUP BY b.data_grade ORDER BY b.data_grade
+    </select>
+
+    <!-- ============================================================
+         4. 时序查询
+         ============================================================ -->
+
+    <select id="selectDailySeries" resultType="com.carbon.platform.energy.dto.TimeSeriesVO$Point">
+        SELECT
+            DATE_FORMAT(d.stat_date, '%Y-%m-%d') AS time,
+            d.building_id AS buildingId,
+            ROUND(SUM(d.electricity_kwh), 3) AS electricityKwh,
+            ROUND(SUM(d.hvac_kwh), 3)        AS hvacKwh,
+            ROUND(SUM(d.water_m3), 3)        AS waterM3,
+            ROUND(SUM(d.carbon_kg), 3)       AS carbonKg,
+            ROUND(AVG(d.cop_avg), 3)         AS cop,
+            ROUND(AVG(d.air_temp_avg), 2)    AS airTemperatureC,
+            MAX(CASE WHEN d.anomaly_hours &gt; 0 THEN 1 ELSE 0 END) AS anomalyFlag
+        FROM agg_building_daily d
+        <where>
+            <if test="startDate != null">AND d.stat_date &gt;= #{startDate}</if>
+            <if test="endDate != null">AND d.stat_date &lt;= #{endDate}</if>
+            <if test="onlyAnomaly">AND d.anomaly_hours &gt; 0</if>
+            <include refid="buildingFilter"/>
+        </where>
+        GROUP BY d.stat_date, d.building_id
+        ORDER BY d.stat_date, d.building_id
+    </select>
+
+    <select id="selectMonthlySeries" resultType="com.carbon.platform.energy.dto.TimeSeriesVO$Point">
+        SELECT
+            CONCAT(m.stat_year, '-', LPAD(m.stat_month, 2, '0')) AS time,
+            m.building_id AS buildingId,
+            ROUND(SUM(m.electricity_kwh), 3) AS electricityKwh,
+            ROUND(SUM(m.hvac_kwh), 3)        AS hvacKwh,
+            ROUND(SUM(m.water_m3), 3)        AS waterM3,
+            ROUND(SUM(m.carbon_kg), 3)       AS carbonKg,
+            ROUND(AVG(m.cop_avg), 3)         AS cop,
+            ROUND(AVG(m.air_temp_avg), 2)    AS airTemperatureC,
+            MAX(CASE WHEN m.anomaly_hours &gt; 0 THEN 1 ELSE 0 END) AS anomalyFlag
+        FROM agg_building_monthly m
+        <where>
+            <if test="startDate != null">AND CONCAT(m.stat_year, '-', LPAD(m.stat_month, 2, '0'))
+                &gt;= DATE_FORMAT(#{startDate}, '%Y-%m')</if>
+            <if test="endDate != null">AND CONCAT(m.stat_year, '-', LPAD(m.stat_month, 2, '0'))
+                &lt;= DATE_FORMAT(#{endDate}, '%Y-%m')</if>
+            <if test="onlyAnomaly">AND m.anomaly_hours &gt; 0</if>
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND m.building_id IN
+                <foreach collection="buildingIds" item="bid" open="(" separator="," close=")">#{bid}</foreach>
+            </if>
+            <if test="siteId != null and siteId != ''">AND m.site_id = #{siteId}</if>
+            <if test="buildingType != null and buildingType != ''">AND m.building_type_cn = #{buildingType}</if>
+        </where>
+        GROUP BY m.stat_year, m.stat_month, m.building_id
+        ORDER BY m.stat_year, m.stat_month, m.building_id
+    </select>
+
+    <select id="selectHourlySeries" resultType="com.carbon.platform.energy.dto.TimeSeriesVO$Point">
+        SELECT
+            DATE_FORMAT(f.ts, '%Y-%m-%d %H:00:00') AS time,
+            f.building_id AS buildingId,
+            ROUND(f.electricity_kwh, 3) AS electricityKwh,
+            ROUND(f.hvac_kwh, 3)        AS hvacKwh,
+            ROUND(f.water_m3, 3)        AS waterM3,
+            ROUND(f.carbon_kg, 3)       AS carbonKg,
+            f.cop                       AS cop,
+            f.air_temperature_c         AS airTemperatureC,
+            f.anomaly_flag              AS anomalyFlag
+        FROM fact_energy_hourly f
+        <where>
+            <!-- 分区裁剪：直接对分区列 stat_year 加条件 -->
+            <if test="startDate != null">
+                AND f.ts &gt;= #{startDate}
+                AND f.stat_year &gt;= YEAR(#{startDate})
+            </if>
+            <if test="endDate != null">
+                AND f.ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+                AND f.stat_year &lt;= YEAR(#{endDate})
+            </if>
+            <if test="onlyAnomaly">AND f.anomaly_flag = 1</if>
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND f.building_id IN
+                <foreach collection="buildingIds" item="bid" open="(" separator="," close=")">#{bid}</foreach>
+            </if>
+        </where>
+        ORDER BY f.ts
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectBuildingSummary" resultType="com.carbon.platform.energy.dto.TimeSeriesVO$Summary">
+        SELECT
+            d.building_id AS buildingId,
+            MAX(b.building_type_cn) AS buildingTypeCn,
+            ROUND(SUM(d.electricity_kwh), 3) AS electricityKwh,
+            ROUND(SUM(d.hvac_kwh), 3)        AS hvacKwh,
+            ROUND(SUM(d.carbon_kg), 3)       AS carbonKg,
+            ROUND(AVG(d.cop_avg), 3)         AS copAvg,
+            ROUND(SUM(d.electricity_kwh) / NULLIF(MAX(b.area_m2), 0), 2) AS eui
+        FROM agg_building_daily d
+        JOIN dim_building b ON b.building_id = d.building_id
+        <where>
+            <if test="startDate != null">AND d.stat_date &gt;= #{startDate}</if>
+            <if test="endDate != null">AND d.stat_date &lt;= #{endDate}</if>
+            <if test="buildingIds != null and buildingIds.size() > 0">
+                AND d.building_id IN
+                <foreach collection="buildingIds" item="bid" open="(" separator="," close=")">#{bid}</foreach>
+            </if>
+            <if test="siteId != null and siteId != ''">AND d.site_id = #{siteId}</if>
+            <if test="buildingType != null and buildingType != ''">AND b.building_type_cn = #{buildingType}</if>
+        </where>
+        GROUP BY d.building_id
+        ORDER BY electricityKwh DESC
+        LIMIT #{limit}
+    </select>
+
+    <!-- ============================================================
+         5. 维表查询
+         ============================================================ -->
+    <select id="selectBuildings" resultType="java.util.Map">
+        SELECT b.building_id AS buildingId, b.site_id AS siteId,
+               b.building_type_cn AS buildingTypeCn, b.data_grade AS dataGrade,
+               b.area_m2 AS areaM2, b.electricity_kwh_year AS electricityKwhYear,
+               b.eui_kwh_m2_year AS euiKwhM2Year, b.energy_grade AS energyGrade,
+               b.cop_mean AS copMean, b.anomaly_rate AS anomalyRate
+        FROM dim_building b
+        <where>
+            <if test="siteId != null and siteId != ''">AND b.site_id = #{siteId}</if>
+            <if test="buildingType != null and buildingType != ''">AND b.building_type_cn = #{buildingType}</if>
+            <if test="keyword != null and keyword != ''">
+                AND (b.building_id LIKE CONCAT('%', #{keyword}, '%')
+                     OR b.building_type_cn LIKE CONCAT('%', #{keyword}, '%'))
+            </if>
+        </where>
+        ORDER BY b.electricity_kwh_year DESC
+        LIMIT #{limit}
+    </select>
+
+    <select id="selectBuildingDetail" resultType="java.util.Map">
+        SELECT * FROM dim_building WHERE building_id = #{buildingId}
+    </select>
+
+    <select id="selectSites" resultType="java.util.Map">
+        SELECT s.site_id AS siteId, s.building_count AS buildingCount,
+               ROUND(SUM(b.electricity_kwh_year), 0) AS electricityKwhYear,
+               ROUND(SUM(b.carbon_kg_year), 0)       AS carbonKgYear,
+               COUNT(DISTINCT b.building_type_cn)    AS typeCount
+        FROM dim_site s
+        LEFT JOIN dim_building b ON b.site_id = s.site_id
+        GROUP BY s.site_id, s.building_count
+        ORDER BY electricityKwhYear DESC
+    </select>
+
+</mapper>

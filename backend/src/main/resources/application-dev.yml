@@ -1,0 +1,7 @@
+# 开发环境覆盖项
+logging:
+  level:
+    com.carbon.platform: DEBUG
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl

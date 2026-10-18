@@ -1,0 +1,11 @@
+# 生产环境：关闭 SQL 日志，密钥走环境变量
+logging:
+  level:
+    root: WARN
+    com.carbon.platform: INFO
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+carbon:
+  ai:
+    mode: http

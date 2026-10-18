@@ -1,0 +1,145 @@
+# ============================================================================
+# 碳能智控运维平台 后端配置
+# ============================================================================
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
+  compression:
+    enabled: true
+    mime-types: application/json,text/html,text/css,application/javascript
+  tomcat:
+    threads:
+      max: 200
+      min-spare: 20
+
+spring:
+  application:
+    name: carbon-platform-backend
+  servlet:
+    multipart:
+      max-file-size: 100MB      # 数据导入上传上限
+      max-request-size: 100MB
+  profiles:
+    active: dev
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    # 【重要】不要设置为 non_null：能耗数据中 hvac/cop/水温等字段因园区无相应表计
+    # 而合法缺失（缺失率可达 43%~95%）。若把 null 字段从 JSON 中剔除，
+    # 前端与 AI 模块无法区分"该字段无数据"与"接口未返回该字段"，
+    # 会导致图表断线、AI 误判为数据缺失故障。因此显式保留 null。
+    default-property-inclusion: always
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    # 项目独立 MySQL 实例（端口 3307），见 scripts/mysql.sh
+    url: jdbc:mysql://127.0.0.1:3307/carbon_energy?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+    # 数据库账号：默认值仅用于本地开发（项目独立 MySQL 实例，root 无密码）。
+    # 其他人克隆项目后请通过环境变量覆盖，不要把真实密码写进本文件：
+    #   export CARBON_DB_USER=youruser
+    #   export CARBON_DB_PASSWORD=yourpassword
+    username: ${CARBON_DB_USER:root}
+    password: ${CARBON_DB_PASSWORD:}
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      connection-timeout: 10000
+      pool-name: CarbonHikariPool
+  cache:
+    type: caffeine
+    caffeine:
+      spec: maximumSize=2000,expireAfterWrite=300s
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.carbon.platform.**.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    # 生产环境请改为 org.apache.ibatis.logging.nologging.NoLoggingImpl
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# ---------------------------------------------------------------- 业务配置
+carbon:
+  jwt:
+    # ⚠️ 生产环境务必通过环境变量 CARBON_JWT_SECRET 覆盖
+    secret: ${CARBON_JWT_SECRET:carbon-platform-dev-secret-key-change-in-production-2026}
+    expire-seconds: 28800
+    header: Authorization
+    prefix: "Bearer "
+  # AI 服务（角色 B 提供）。mode=mock 时不依赖外部服务，便于全栈先行开发
+  ai:
+    # mock   本地统计引擎（数据类问题强，知识类问题答不了）
+    # http   全部走外部 AI 服务（知识类问题强，数据类问题会失准）
+    # hybrid 按问题类型路由：知识类→RAG 知识库，数据类→本地统计【推荐】
+    mode: ${CARBON_AI_MODE:hybrid}
+    base-url: ${CARBON_AI_BASE_URL:http://127.0.0.1:8000}
+    connect-timeout-ms: 3000
+    read-timeout-ms: 60000
+  # 大模型（用于「AI 批量规划导入」的字段语义映射 + RAG 知识问答生成）
+  #
+  # provider 取值（三家均为 OpenAI 兼容接口，共用同一个客户端实现）：
+  #   deepseek    当前使用；base-url=https://api.deepseek.com，model=deepseek-chat
+  #   modelscope  魔搭云；base-url=https://api-inference.modelscope.cn/v1
+  #   dashscope   阿里云百炼；base-url=https://dashscope.aliyuncs.com/compatible-mode/v1
+  #   mock        离线演示用，不联网，按列名确定性推断
+  #   none        强制走规则引擎 / 纯检索回答（或不配置时默认）
+  #
+  # 【密钥安全】api-key 只从环境变量 CARBON_LLM_KEY 读取，
+  # 绝不写进本文件。本地密钥存放于 secrets/local.env（已被 .gitignore 忽略，权限 600），
+  # 由 scripts/start-all.sh 自动加载。
+  llm:
+    provider: ${CARBON_LLM_PROVIDER:none}
+    api-key: ${CARBON_LLM_KEY:}
+    base-url: ${CARBON_LLM_BASE:https://api.deepseek.com}
+    model: ${CARBON_LLM_MODEL:deepseek-chat}
+    connect-timeout-ms: 5000
+    read-timeout-ms: 120000
+
+  # 数据导入（五步向导）
+  import:
+    tmp-dir: .import-tmp        # 上传临时目录（项目内，勿提交）
+    max-rows: 200000            # 单次导入行数上限
+  # 演示数据范围（防止误查全表拖慢响应）
+  query:
+    max-time-range-days: 366
+    default-page-size: 20
+    max-page-size: 500
+
+# ---------------------------------------------------------------- 接口文档
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    # 按 Controller 的 @Tag 排序，便于按业务模块浏览
+    tags-sorter: alpha
+    operations-sorter: alpha
+    display-request-duration: true
+  default-produces-media-type: application/json
+
+# ---------------------------------------------------------------- 监控
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    root: INFO
+    com.carbon.platform: DEBUG

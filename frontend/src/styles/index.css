@@ -1,0 +1,150 @@
+:root {
+  --carbon-bg: #0b1220;
+  --carbon-panel: #111a2e;
+  --carbon-border: #1e2b45;
+  --carbon-primary: #2f7dff;
+  --carbon-success: #22c55e;
+  --carbon-warning: #f59e0b;
+  --carbon-danger: #ef4444;
+  --carbon-text: #e6edf7;
+  --carbon-text-dim: #8ba0c0;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei',
+    'Helvetica Neue', Arial, sans-serif;
+  background: #f4f6fa;
+  color: #1f2937;
+}
+
+/* 深色主题区域（看板 / 3D 园区） */
+.carbon-dark {
+  background: var(--carbon-bg);
+  color: var(--carbon-text);
+}
+
+.page-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.page-title {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-title::before {
+  content: '';
+  width: 3px;
+  height: 15px;
+  background: var(--carbon-primary);
+  border-radius: 2px;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+/* KPI 指标卡 */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.kpi-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 14px 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  border-left: 3px solid var(--carbon-primary);
+}
+
+.kpi-card.green { border-left-color: var(--carbon-success); }
+.kpi-card.orange { border-left-color: var(--carbon-warning); }
+.kpi-card.red { border-left-color: var(--carbon-danger); }
+
+.kpi-label {
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 6px;
+}
+
+.kpi-value {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.kpi-unit {
+  font-size: 12px;
+  font-weight: 400;
+  color: #9ca3af;
+  margin-left: 3px;
+}
+
+.kpi-sub {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 4px;
+}
+
+.chart-box {
+  background: #fff;
+  border-radius: 8px;
+  padding: 14px 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.chart-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: #374151;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 12px;
+}
+
+/* 数据来源标注徽章（实测/推算/仿真） */
+.src-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+  font-weight: 400;
+}
+.src-measured { background: #dcfce7; color: #15803d; }
+.src-derived { background: #fef3c7; color: #b45309; }
+.src-simulated { background: #e0e7ff; color: #4338ca; }
+.src-labeled { background: #fce7f3; color: #be185d; }
+
+.mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, Consolas, monospace; }
+.text-dim { color: #6b7280; }
+.mt-12 { margin-top: 12px; }
+.mb-12 { margin-bottom: 12px; }
