@@ -11,6 +11,7 @@ import com.carbon.platform.energy.imports.dto.UploadResultVO;
 import com.carbon.platform.energy.imports.service.DataImportService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -37,6 +38,7 @@ public class DataImportController {
     private final JdbcTemplate jdbcTemplate;
     /** 回滚批次后需要刷新预聚合表，否则看板仍显示已删除的数据 */
     private final com.carbon.platform.energy.imports.service.AggregateRefreshService aggregateRefreshService;
+    private final com.carbon.platform.energy.imports.service.ImportAuditExportService auditExportService;
 
     @Operation(summary = "步骤① 上传数据源并识别列（返回自动字段映射建议）")
     @PostMapping("/upload")
@@ -101,6 +103,14 @@ public class DataImportController {
                 FROM data_import_log WHERE id = ?
                 """, id);
         return R.ok(rows.isEmpty() ? Map.of() : rows.get(0));
+    }
+
+    @Operation(summary = "导出导入审计记录（Excel：导入批次 / 字段映射 / 清洗规则 三个 Sheet）")
+    @GetMapping("/logs/export")
+    @OperLog(title = "数据导入-审计记录导出", businessType = OperLog.BusinessType.EXPORT)
+    public void exportLogs(@RequestParam(required = false) Integer limit,
+                           HttpServletResponse response) throws java.io.IOException {
+        auditExportService.export(response, limit);
     }
 
     // ================================================================

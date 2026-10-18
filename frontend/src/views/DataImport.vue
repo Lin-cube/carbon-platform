@@ -1,7 +1,15 @@
 <template>
   <div>
     <div class="page-card mb-12">
-      <div class="page-title">数据导入与治理 · 五步向导</div>
+      <div class="page-title-row">
+        <div class="page-title">数据导入与治理 · 五步向导</div>
+        <!-- 审计记录入口：原来只能走完向导第 5 步才能看到历史批次，
+             不导入就没法查看。这里提供常驻入口，随时可进。 -->
+        <el-button v-if="step !== 4" text type="primary" @click="openAudit">
+          查看历史导入批次 →
+        </el-button>
+        <el-button v-else text type="primary" @click="step = 0">← 返回导入向导</el-button>
+      </div>
       <el-steps :active="step" finish-status="success" align-center>
         <el-step title="数据源选择" description="上传 CSV / Excel" />
         <el-step title="字段映射" description="自动识别 + 人工确认" />
@@ -223,7 +231,12 @@
                 title="导入的数据按 A 级（实测）登记；anomaly_flag = -1（未评估）是因为异常检测需要 52 周历史基线，新数据历史不足无法判定。如需参与异常分析，请导入至少 52 周历史后重新运行标注脚本。" />
 
       <div class="chart-box">
-        <div class="chart-title">历史导入批次（审计留痕）</div>
+        <div class="chart-title-row">
+          <div class="chart-title">历史导入批次（审计留痕）</div>
+          <el-button size="small" type="primary" plain :loading="exporting" @click="exportLogs">
+            导出审计记录（Excel）
+          </el-button>
+        </div>
         <el-table :data="logs" size="small" border v-loading="loading">
           <el-table-column prop="batchNo" label="批次号" min-width="195" />
           <el-table-column prop="fileName" label="文件名" min-width="170" show-overflow-tooltip />
@@ -372,6 +385,7 @@ const logs = ref<ImportLog[]>([])
 const logDetailVisible = ref(false)
 const logDetail = ref<Record<string, unknown> | null>(null)
 const rollbacking = ref(false)
+const exporting = ref(false)
 const selectedFile = ref<File | null>(null)
 
 const cleanRules = reactive({
@@ -510,6 +524,37 @@ async function doImport() {
 }
 
 
+
+/** 跳到审计页（第 5 步）并刷新列表 */
+async function openAudit() {
+  step.value = 4
+  await loadLogs()
+}
+
+/** 导出审计记录为 Excel（3 个 Sheet） */
+async function exportLogs() {
+  exporting.value = true
+  try {
+    const blob = await request<Blob>({
+      url: '/import/logs/export',
+      method: 'get',
+      responseType: 'blob'
+    })
+    const b = blob instanceof Blob ? blob : new Blob([blob as unknown as BlobPart])
+    const url = URL.createObjectURL(b)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `导入审计记录_${new Date().toISOString().slice(0, 10)}.xlsx`
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage.success('审计记录已导出')
+  } catch {
+    ElMessage.error('导出失败，请查看后端日志')
+  } finally {
+    exporting.value = false
+  }
+}
+
 async function doRollback() {
   if (!logDetail.value || !logDetail.value.id) return
   try {
@@ -586,6 +631,14 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.page-title-row,
+.chart-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .uploader { max-width: 700px; }
 .step-actions {
   margin-top: 18px;
