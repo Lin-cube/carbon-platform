@@ -35,7 +35,9 @@ spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     # 项目独立 MySQL 实例（端口 3307），见 scripts/mysql.sh
-    url: jdbc:mysql://127.0.0.1:3307/carbon_energy?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+    # 数据库地址可通过环境变量覆盖：本地默认 3307（项目内独立实例），
+    # 生产服务器通常是标准的 3306，部署时设 CARBON_DB_URL 即可，无需改代码。
+    url: ${CARBON_DB_URL:jdbc:mysql://127.0.0.1:3307/carbon_energy?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true}
     # 数据库账号：默认值仅用于本地开发（项目独立 MySQL 实例，root 无密码）。
     # 其他人克隆项目后请通过环境变量覆盖，不要把真实密码写进本文件：
     #   export CARBON_DB_USER=youruser

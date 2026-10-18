@@ -1,0 +1,42 @@
+[Unit]
+Description=Carbon Platform Backend (Spring Boot 3)
+Documentation=https://github.com/Lin-cube/carbon-platform
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=carbon
+Group=carbon
+WorkingDirectory=/opt/carbon-platform
+
+# 密钥从环境文件读取。
+# 注意：systemd 的 EnvironmentFile 不支持 `export` 前缀，
+# 部署脚本已自动生成去掉了 export 的版本（secrets/local.env.systemd）。
+EnvironmentFile=/opt/carbon-platform/secrets/local.env.systemd
+
+# 堆内存：2G 机器用 512m，4G 机器可调到 768m~1g。
+# 实测本项目默认堆 597MB，压到 384m 仍可正常工作；
+# SerialGC 在小内存 + 单核场景比 G1 省内存。
+ExecStart=/usr/bin/java \
+    -Xms256m -Xmx512m \
+    -XX:MaxMetaspaceSize=192m \
+    -XX:+UseSerialGC \
+    -Duser.timezone=Asia/Shanghai \
+    -jar /opt/carbon-platform/backend.jar
+
+Restart=always
+RestartSec=5
+# 启动失败时不要无限重启（比如数据库没起来）
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+StandardOutput=append:/opt/carbon-platform/logs/backend.log
+StandardError=append:/opt/carbon-platform/logs/backend.err.log
+
+# 基本加固
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

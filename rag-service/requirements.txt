@@ -1,0 +1,22 @@
+# RAG 服务依赖（生产部署用）
+#
+# 安装：
+#   python3 -m venv venv
+#   venv/bin/pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+#
+# 说明：
+#   · 版本锁定为本地验证过的组合，避免服务器上装到不兼容的新版本
+#   · 没有用 sentence-transformers / torch —— 本项目用「字符 n-gram TF-IDF」做语义近似，
+#     不需要下载模型，装完即可用（服务器内存也省下来了）
+#   · 实际版本以 pip freeze 为准，升级前请先在本地跑一遍 rag-service 的评测
+
+# HTTP 服务
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+
+# 检索
+jieba==0.42.1
+rank-bm25==0.2.2
+scikit-learn==1.9.1
+scipy==1.18.1
+numpy==2.5.4

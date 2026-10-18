@@ -1,0 +1,31 @@
+[Unit]
+Description=Carbon Platform RAG Service (FastAPI)
+Documentation=https://github.com/Lin-cube/carbon-platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=carbon
+Group=carbon
+WorkingDirectory=/opt/carbon-platform/rag-service/src
+
+EnvironmentFile=/opt/carbon-platform/secrets/local.env.systemd
+
+# 只监听 127.0.0.1，绝不对公网暴露（不需要走 nginx，只有后端调用它）
+ExecStart=/opt/carbon-platform/venv/bin/uvicorn app:app \
+    --host 127.0.0.1 --port 8000 --workers 1
+
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+StandardOutput=append:/opt/carbon-platform/logs/rag.log
+StandardError=append:/opt/carbon-platform/logs/rag.err.log
+
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

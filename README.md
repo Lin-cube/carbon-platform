@@ -373,7 +373,8 @@ carbon-platform/
 | [`11-导入数据全链路说明.md`](docs/deliverables/11-导入数据全链路说明.md) | 导入后数据流向与各页面可见性 |
 | [`12-DeepSeek与知识库的分工.md`](docs/deliverables/12-DeepSeek与知识库的分工.md) | 大模型与知识库各负责什么、拒答机制 |
 | [`09-服务器配置评估.md`](docs/deliverables/09-服务器配置评估.md) | 实测资源占用与选型建议 |
-| [`10-香港服务器宝塔部署方案.md`](docs/deliverables/10-香港服务器宝塔部署方案.md) | 生产部署完整步骤 |
+| [`deploy/README.md`](deploy/README.md) | **雨云香港服务器部署指南**（含配置选型、脚本用法、排错） |
+| [`10-香港服务器宝塔部署方案.md`](docs/deliverables/10-香港服务器宝塔部署方案.md) | 宝塔面板部署方案（备选） |
 | [`14-启动速查.md`](docs/deliverables/14-启动速查.md) | 每次启动/停止/排错速查 |
 | [`13-VSCode爆红排查.md`](docs/deliverables/13-VSCode爆红排查.md) | IDE 报错排查（Lombok/Maven 导入） |
 | [`docs/data_dictionary.md`](docs/data_dictionary.md) | 45 个字段的完整数据字典 |
