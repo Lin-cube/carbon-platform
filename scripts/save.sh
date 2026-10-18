@@ -2,23 +2,34 @@
 # 一键提交并推送（带推送前安全检查）
 #
 # 用法：
-#   ./scripts/save.sh "fix: 修复了什么问题"
-#   ./scripts/save.sh                    # 不给说明时用默认时间戳消息
+#   ./scripts/save.sh "fix: 修复了什么问题"           # 只提交到本地（默认）
+#   ./scripts/save.sh "fix: ..." --push               # 提交并推送到 GitHub
+#   ./scripts/save.sh                                  # 用时间戳作为默认提交信息
+#
+# 默认【只提交，不推送】。推送必须显式加 --push。
+# （用户 2026-10 明确要求：后续不要自动上传 GitHub）
 #
 # 做的事：
 #   1. 安全检查（密钥 / 真实密码 / 本机绝对路径 / 大目录）
 #   2. git add -A && commit
-#   3. git push
-#   4. 推送后验证 secrets/local.env 在远程不存在（必须 404）
+#   3. 仅在带 --push 时：git push + 验证 secrets/local.env 在远程 404
 #
-# 任何一项安全检查不通过就【中止】，不会推送。
+# 任何一项安全检查不通过就【中止】。
 
 set -uo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-MSG="${1:-chore: 更新（$(date '+%Y-%m-%d %H:%M')）}"
+PUSH=0
+MSG=""
+for arg in "$@"; do
+  case "$arg" in
+    --push) PUSH=1 ;;
+    *) [ -z "$MSG" ] && MSG="$arg" ;;
+  esac
+done
+MSG="${MSG:-chore: 更新（$(date '+%Y-%m-%d %H:%M')）}"
 REPO="Lin-cube/carbon-platform"
 BRANCH="main"
 
@@ -110,7 +121,23 @@ else
   green "  ✅ 已提交：$(git log --oneline -1)"
 fi
 
-# ── 推送 ────────────────────────────────────────────────────────
+# ── 推送（仅在带 --push 时执行）─────────────────────────────────
+if [ "$PUSH" != "1" ]; then
+  echo
+  bold "════════ 完成（未推送）════════"
+  LOCAL_HEAD=$(git rev-parse HEAD)
+  REMOTE_HEAD=$(git ls-remote origin "refs/heads/$BRANCH" 2>/dev/null | cut -f1 || true)
+  if [ -n "$REMOTE_HEAD" ] && [ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]; then
+    yellow "  本地领先远程若干提交（按当前策略不自动推送）"
+    echo "  本地: $(git rev-parse --short HEAD)"
+    echo "  远程: $(echo "$REMOTE_HEAD" | cut -c1-7)"
+    echo "  如需推送：./scripts/save.sh \"\" --push"
+  else
+    green "  已提交到本地仓库"
+  fi
+  exit 0
+fi
+
 echo
 bold "════════ 推送 ════════"
 LOCAL_HEAD=$(git rev-parse HEAD)

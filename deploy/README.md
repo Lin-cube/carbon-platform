@@ -111,7 +111,7 @@ dig +short 你的域名.com
 在你自己的电脑上（**不是在服务器上**）：
 
 ```bash
-cd /Users/wcy/carbon-2/carbon-platform
+cd <项目根目录>
 ./deploy/build-package.sh
 ```
 
@@ -294,7 +294,7 @@ journalctl -u carbon-backend -f          # systemd 层日志（启动失败时�
 
 ```bash
 # 本地
-cd /Users/wcy/carbon-2/carbon-platform
+cd <项目根目录>
 ./deploy/build-package.sh
 scp deploy/out/carbon-platform-deploy-*.tar.gz root@服务器IP:/root/
 
