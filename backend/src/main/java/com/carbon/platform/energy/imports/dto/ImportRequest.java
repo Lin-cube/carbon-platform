@@ -44,5 +44,10 @@ public class ImportRequest {
         private String electricityUnit = "kwh";
         /** 去重策略：none / byBuildingTime */
         private String dedupStrategy = "byBuildingTime";
+
+        /** 是否做单位/量级一致性校验（默认开启）。
+         *  开启后，与同列中位数相差 300 倍以上的值会被跳过并给出诊断，
+         *  用于捕获「同一列混用 kWh 与 MWh」这类单位错误。 */
+        private Boolean unitConsistencyCheck = true;
     }
 }

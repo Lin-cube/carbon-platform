@@ -59,16 +59,52 @@ public class DataImportService {
     private Path tmpPath;
 
     /** 预置的日期时间格式，按顺序尝试 */
+    /**
+     * 支持的时间格式。
+     *
+     * <p>顺序很重要：必须**先尝试具体格式**，最后才把纯数字当 Unix 时间戳。
+     * 实测踩过的坑：{@code 2018050106}（紧凑写法 yyyyMMddHH）是 10 位数字，
+     * 若先走「10 位 = Unix 秒」分支，会被解析成 <b>2033-12-13</b>，
+     * 数据静默错位 15 年且无任何提示。
+     */
     private static final List<DateTimeFormatter> DATE_FORMATS = List.of(
+            // ISO 与常见分隔符
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"),
             DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm:ss"),
             DateTimeFormatter.ofPattern("yyyy/MM/dd HH:mm"),
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"),
+            // 紧凑写法
+            DateTimeFormatter.ofPattern("yyyyMMddHHmmss"),
+            DateTimeFormatter.ofPattern("yyyyMMddHHmm"),
             DateTimeFormatter.ofPattern("yyyyMMddHH"),
+            DateTimeFormatter.ofPattern("yyyyMMdd HHmm"),
+            // 中文写法
+            DateTimeFormatter.ofPattern("yyyy年M月d日H时"),
+            DateTimeFormatter.ofPattern("yyyy年M月d日 H时"),
+            DateTimeFormatter.ofPattern("yyyy年M月d日HH时"),
+            DateTimeFormatter.ofPattern("yyyy年M月d日"),
+            // 仅日期
             DateTimeFormatter.ofPattern("yyyy-MM-dd"),
-            DateTimeFormatter.ofPattern("yyyy/MM/dd")
+            DateTimeFormatter.ofPattern("yyyy/M/d"),
+            DateTimeFormatter.ofPattern("yyyy/MM/dd"),
+            DateTimeFormatter.ofPattern("yyyyMMdd")
     );
+
+    /**
+     * 时间合理范围。解析结果超出该范围视为不可信（多半是格式误判），
+     * 例如把 {@code 2018050106} 当 Unix 秒会得到 2033 年。
+     */
+    private static final int MIN_YEAR = 2000;
+    private static final int MAX_YEAR = 2100;
+
+    /**
+     * 单位一致性阈值：同列内某值与列中位数相差超过该倍数，判定为「单位/量级不一致」。
+     *
+     * <p>kWh 与 MWh 恰好相差 1000 倍，取 300 可稳定捕获该错误，
+     * 同时不会误伤正常的负荷波动（同一栋楼逐小时电量一般不会相差 300 倍）。
+     */
+    private static final double UNIT_OUTLIER_RATIO = 300.0;
 
     private static final Pattern NUMERIC = Pattern.compile("^-?\\d+(\\.\\d+)?([eE][-+]?\\d+)?$");
 
@@ -309,6 +345,13 @@ public class DataImportService {
             fieldStats.put(f.getColumn(), 0);
         }
 
+        // ★ 单位一致性预扫描：先算出每个数值列的「列中位数」，供主循环判定量级异常。
+        // 【为什么需要】原实现只用一条全局规则（electricityUnit=kwh|mwh）对所有行做统一换算，
+        // 无法发现「同一列里混用 kWh 与 MWh」的情况 —— 实测 0.118 与 115000 会被
+        // 原样入库，造成 1000 倍误差且毫无提示，后续统计、异常检测、评级全部失真。
+        Map<ImportTargetField, Double> columnMedian = computeColumnMedians(rows, mapping);
+        Map<ImportTargetField, Integer> outlierCount = new LinkedHashMap<>();
+
         List<Object[]> batch = new ArrayList<>();
         Set<String> seenKeys = new HashSet<>();
         int success = 0, failed = 0, skipped = 0;
@@ -386,10 +429,46 @@ public class DataImportService {
                     }
                 }
 
+                // ★ 单位/量级一致性校验
+                // 若某值与所在列中位数相差超过 UNIT_OUTLIER_RATIO 倍，判定为「单位混用」。
+                // 处理方式：跳过该行并给出可追溯的诊断依据（不猜测换算，避免制造假数据）。
+                if (Boolean.TRUE.equals(rules.getUnitConsistencyCheck())) {
+                    String unitHit = null;
+                    ImportTargetField unitField = null;
+                    for (Map.Entry<ImportTargetField, Double> me : columnMedian.entrySet()) {
+                        ImportTargetField f = me.getKey();
+                        Double med = me.getValue();
+                        Double val = metricValue(f, elec, hvac, water, gas);
+                        if (med == null || val == null || med <= 0 || val <= 0) {
+                            continue;
+                        }
+                        double ratio = Math.max(val / med, med / val);
+                        if (ratio >= UNIT_OUTLIER_RATIO) {
+                            unitHit = String.format(
+                                    "数值 %s 与同列中位数 %.3f 相差 %.0f 倍，疑似单位不一致"
+                                            + "（如 kWh 与 MWh 混用）；已跳过该行，请核对源数据单位",
+                                    String.valueOf(val), med, ratio);
+                            unitField = f;
+                            break;
+                        }
+                    }
+                    if (unitHit != null) {
+                        skipped++;
+                        outlierCount.merge(unitField, 1, Integer::sum);
+                        addError(result, rowNum, unitField.getColumn(), unitHit,
+                                raw.get(unitField));
+                        continue;
+                    }
+                }
+
                 // 清洗：缺失值策略
                 String ms = rules.getMissingStrategy();
                 if ("drop".equalsIgnoreCase(ms) && elec == null) {
                     skipped++;
+                    // 补诊断说明：原实现静默跳过，用户不知道这行为什么没进来
+                    addError(result, rowNum, ImportTargetField.ELECTRICITY_KWH.getColumn(),
+                            "电力能耗缺失，按「缺失值策略=剔除」跳过该行",
+                            raw.get(ImportTargetField.ELECTRICITY_KWH));
                     continue;
                 }
                 if ("zero".equalsIgnoreCase(ms) && elec == null) {
@@ -401,6 +480,8 @@ public class DataImportService {
                     String key = buildingId + "|" + ts;
                     if (!seenKeys.add(key)) {
                         skipped++;
+                        addError(result, rowNum, "timestamp",
+                                "与前面行重复（同一建筑同一时刻），按去重规则跳过", key);
                         continue;
                     }
                 }
@@ -764,6 +845,54 @@ public class DataImportService {
         }
     }
 
+    /**
+     * 预扫描：计算每个数值列在整份文件中的中位数。
+     *
+     * <p>用中位数而非平均值，因为中位数对极端值（正是我们要检测的对象）不敏感，
+     * 不会被少数 MWh 行拉偏。
+     */
+    private Map<ImportTargetField, Double> computeColumnMedians(
+            List<List<String>> rows, Map<ImportTargetField, Integer> mapping) {
+        Map<ImportTargetField, Double> medians = new LinkedHashMap<>();
+        for (ImportTargetField f : List.of(ImportTargetField.ELECTRICITY_KWH,
+                ImportTargetField.HVAC_KWH, ImportTargetField.WATER_M3,
+                ImportTargetField.GAS_KWH)) {
+            Integer idx = mapping.get(f);
+            if (idx == null) {
+                continue;
+            }
+            List<Double> vals = new ArrayList<>();
+            for (List<String> row : rows) {
+                String v = idx < row.size() ? row.get(idx) : null;
+                Double d = parseNumber(v);
+                if (d != null && d > 0) {
+                    vals.add(d);
+                }
+            }
+            if (vals.size() < 3) {
+                continue;   // 样本太少，中位数没有统计意义
+            }
+            java.util.Collections.sort(vals);
+            double med = vals.size() % 2 == 1
+                    ? vals.get(vals.size() / 2)
+                    : (vals.get(vals.size() / 2 - 1) + vals.get(vals.size() / 2)) / 2.0;
+            medians.put(f, med);
+        }
+        return medians;
+    }
+
+    /** 按字段取对应的解析值，供量级一致性校验使用 */
+    private Double metricValue(ImportTargetField f, Double elec, Double hvac,
+                               Double water, Double gas) {
+        return switch (f) {
+            case ELECTRICITY_KWH -> elec;
+            case HVAC_KWH -> hvac;
+            case WATER_M3 -> water;
+            case GAS_KWH -> gas;
+            default -> null;
+        };
+    }
+
     private void addError(ImportResultVO r, int rowNum, String field, String msg, String value) {
         if (r.getErrors().size() < 100) {
             ImportResultVO.RowError e = new ImportResultVO.RowError();
@@ -892,30 +1021,63 @@ public class DataImportService {
         return numericOrDate >= nonEmpty * 0.6;
     }
 
+    /**
+     * 解析时间字符串。
+     *
+     * <p><b>关键顺序</b>：先按具体日期格式尝试，最后才把纯数字当 Unix 时间戳。
+     * 反过来的话 {@code 2018050106}（yyyyMMddHH）会被当成 10 位 epoch 秒，
+     * 解析成 2033 年，且不会有任何报错（实测踩过）。
+     *
+     * <p>解析结果还要通过<b>年份范围校验</b>：超出 2000~2100 视为格式误判，返回 null
+     * 并让上层记录「时间格式无法识别」。
+     */
     private LocalDateTime parseTimestamp(String v) {
         if (!StringUtils.hasText(v)) return null;
         String s = v.trim();
-        // 纯数字时间戳（10 位秒 / 13 位毫秒）
-        if (s.matches("^\\d{10}$")) {
-            return LocalDateTime.ofEpochSecond(Long.parseLong(s), 0,
-                    java.time.ZoneOffset.ofHours(8));
-        }
-        if (s.matches("^\\d{13}$")) {
-            return LocalDateTime.ofEpochSecond(Long.parseLong(s) / 1000, 0,
-                    java.time.ZoneOffset.ofHours(8));
-        }
+
+        // ① 先按具体格式尝试（含紧凑写法与中文写法）
         for (DateTimeFormatter f : DATE_FORMATS) {
             try {
-                return LocalDateTime.parse(s, f);
+                LocalDateTime t = LocalDateTime.parse(s, f);
+                if (inReasonableRange(t)) {
+                    return t;
+                }
             } catch (Exception ignored) {
                 // 继续尝试下一种格式
             }
         }
-        try {
-            return java.time.LocalDate.parse(s, DateTimeFormatter.ofPattern("yyyy-MM-dd")).atStartOfDay();
-        } catch (Exception ignored) {
-            return null;
+        // 仅日期的格式补一次（LocalDateTime 解析不了 yyyy-MM-dd）
+        for (DateTimeFormatter f : List.of(DateTimeFormatter.ofPattern("yyyy-MM-dd"),
+                DateTimeFormatter.ofPattern("yyyy/M/d"),
+                DateTimeFormatter.ofPattern("yyyy年M月d日"))) {
+            try {
+                LocalDateTime t = java.time.LocalDate.parse(s, f).atStartOfDay();
+                if (inReasonableRange(t)) {
+                    return t;
+                }
+            } catch (Exception ignored) {
+                // 继续
+            }
         }
+
+        // ② 最后才当 Unix 时间戳（13 位毫秒 / 10 位秒）
+        if (s.matches("^\\d{13}$")) {
+            LocalDateTime t = LocalDateTime.ofEpochSecond(Long.parseLong(s) / 1000, 0,
+                    java.time.ZoneOffset.ofHours(8));
+            return inReasonableRange(t) ? t : null;
+        }
+        if (s.matches("^\\d{10}$")) {
+            LocalDateTime t = LocalDateTime.ofEpochSecond(Long.parseLong(s), 0,
+                    java.time.ZoneOffset.ofHours(8));
+            return inReasonableRange(t) ? t : null;
+        }
+        return null;
+    }
+
+    /** 年份是否在合理范围内，用于识别时间格式误判 */
+    private boolean inReasonableRange(LocalDateTime t) {
+        int y = t.getYear();
+        return y >= MIN_YEAR && y <= MAX_YEAR;
     }
 
     private Double parseNumber(String v) {
