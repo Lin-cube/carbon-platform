@@ -70,7 +70,9 @@ public class DataImportController {
         return R.ok(jdbcTemplate.queryForList("""
                 SELECT id, batch_no AS batchNo, file_name AS fileName, file_type AS fileType,
                        total_rows AS totalRows, success_rows AS successRows,
-                       failed_rows AS failedRows, status, operator,
+                       failed_rows AS failedRows, status,
+                       dry_run AS dryRun,
+                       operator,
                        DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS createdAt
                 FROM data_import_log ORDER BY id DESC LIMIT ?
                 """, n));
@@ -84,7 +86,8 @@ public class DataImportController {
                 SELECT id, batch_no AS batchNo, file_name AS fileName, file_type AS fileType,
                        total_rows AS totalRows, success_rows AS successRows,
                        failed_rows AS failedRows, field_mapping AS fieldMapping,
-                       clean_rules AS cleanRules, status, error_detail AS errorDetail,
+                       clean_rules AS cleanRules, status, dry_run AS dryRun,
+                       error_detail AS errorDetail,
                        operator, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS createdAt
                 FROM data_import_log WHERE id = ?
                 """, id);

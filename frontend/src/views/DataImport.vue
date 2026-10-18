@@ -220,7 +220,7 @@
                  :sub-title="`批次号 ${result.batchNo} · 成功 ${result.successRows} 行 · 失败 ${result.failedRows} 行 · 跳过 ${result.skippedRows} 行`" />
 
       <el-alert type="info" :closable="false" show-icon class="mb-12"
-                title="导入数据默认标记为 B 级（站点分摊）且 anomaly_flag = -1（未评估），因其非本系统标准计量口径；如需纳入异常分析请在数据治理流程中另行确认。" />
+                title="导入的数据按 A 级（实测）登记；anomaly_flag = -1（未评估）是因为异常检测需要 52 周历史基线，新数据历史不足无法判定。如需参与异常分析，请导入至少 52 周历史后重新运行标注脚本。" />
 
       <div class="chart-box">
         <div class="chart-title">历史导入批次（审计留痕）</div>
@@ -237,6 +237,15 @@
                              : row.status === '预览通过' ? 'info' : 'warning'">
                 {{ row.status }}
               </el-tag>
+            </template>
+          </el-table-column>
+          <!-- 是否入库：用户最容易误解的一列。「预览通过」只是演练，数据没写库；
+               「成功 / 部分成功」才是真的落库。用独立列显著区分。 -->
+          <el-table-column label="是否入库" width="112" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.dryRun === 1 || row.dryRun === true"
+                      size="small" type="info" effect="plain">未入库（预览）</el-tag>
+              <el-tag v-else size="small" type="success">已入库</el-tag>
             </template>
           </el-table-column>
           <el-table-column prop="operator" label="操作人" width="96" />
@@ -326,6 +335,8 @@ interface ImportLog {
   successRows: number
   failedRows: number
   status: string
+  /** 1/true = 仅预览未写库；0/false = 已写入数据库 */
+  dryRun?: number | boolean
   operator: string
   createdAt: string
 }

@@ -659,14 +659,18 @@ public class DataImportService {
             jdbcTemplate.update("""
                     INSERT INTO data_import_log
                       (batch_no, file_name, file_type, total_rows, success_rows, failed_rows,
-                       field_mapping, clean_rules, status, operator)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                       field_mapping, clean_rules, status, dry_run, operator)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     r.getBatchNo(), r.getFileName(),
                     r.getFileName() != null && r.getFileName().toLowerCase(Locale.ROOT).endsWith(".xlsx")
                             ? "EXCEL" : "CSV",
                     r.getTotalRows(), r.getSuccessRows(), r.getFailedRows(),
                     mappingJson, rulesJson, r.getStatus(),
+                    // dry_run：明确记录本批次是否真正写入数据库。
+                    // 【为什么需要】「预览通过」与「成功」在审计列表里视觉上很接近，
+                    // 用户容易误以为预览的数据也入库了。加独立字段后前端可以显著标注。
+                    Boolean.TRUE.equals(r.getDryRun()) ? 1 : 0,
                     com.carbon.platform.common.util.SecurityUtils.currentUsername());
         } catch (Exception e) {
             log.error("导入审计日志写入失败（不影响导入结果）", e);

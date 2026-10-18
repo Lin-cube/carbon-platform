@@ -63,11 +63,13 @@ else
 fi
 
 # ── 4. 不能有本机绝对路径 ───────────────────────────────────────
-HITS=$(git grep -In '/Users/wcy' -- '*.md' '*.sh' '*.yml' '*.json' '*.py' '*.xml' 2>/dev/null | head -3)
+# 用字符类而非字面量：既不会命中本脚本自身（"/Users/" 后面跟的是 "["），
+# 也不写死具体用户名，换机器不用改脚本。
+HITS=$(git grep -InE '/Users/[A-Za-z0-9._-]+/' -- '*.md' '*.sh' '*.yml' '*.json' '*.py' '*.xml' 2>/dev/null | head -3)
 if [ -n "$HITS" ]; then
-  red "  ❌ 发现本机绝对路径（泄露用户名）："
+  red "  ❌ 发现本机绝对路径（会泄露用户名）："
   echo "$HITS" | sed 's/^/     /'
-  yellow "     批量替换：sed -i '' 's|/Users/wcy/carbon-2/carbon-platform|<项目根目录>|g' <文件>"
+  yellow "     处理：把路径改成相对路径，或写成 <项目根目录> 这样的占位符"
   FAIL=1
 else
   green "  ✅ 无本机绝对路径"
