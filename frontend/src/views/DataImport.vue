@@ -248,6 +248,16 @@
               <el-tag v-else size="small" type="success">已入库</el-tag>
             </template>
           </el-table-column>
+          <!-- 库中现有行数：批次追溯的直观证据。导入后应等于成功行数，回滚后变为 0。 -->
+          <el-table-column label="库中行数" width="96" align="right">
+            <template #default="{ row }">
+              <span v-if="row.dryRun === 1 || row.dryRun === true" class="text-muted">—</span>
+              <el-tag v-else-if="row.rowsInFact > 0" size="small" type="success" effect="plain">
+                {{ row.rowsInFact }}
+              </el-tag>
+              <el-tag v-else size="small" type="info" effect="plain">0</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column prop="operator" label="操作人" width="96" />
           <el-table-column prop="createdAt" label="时间" width="160" />
           <el-table-column label="操作" width="86" align="center">
@@ -277,6 +287,14 @@
           <pre class="json-pre">{{ pretty(logDetail.cleanRules) }}</pre>
         </el-descriptions-item>
         <el-descriptions-item label="操作人">{{ logDetail.operator }}</el-descriptions-item>
+        <div class="mt-12" v-if="logDetail && logDetail.dryRun !== 1 && logDetail.dryRun !== true">
+          <el-alert type="warning" :closable="false" show-icon class="mb-12"
+                    title="回滚会删除该批次写入的全部数据行，并同步刷新预聚合表。操作不可撤销，但审计记录会保留（状态改为「已回滚」）。" />
+          <el-button type="danger" :loading="rollbacking" @click="doRollback">
+            回滚该批次（删除这批数据）
+          </el-button>
+        </div>
+
         <el-descriptions-item label="时间">{{ logDetail.createdAt }}</el-descriptions-item>
       </el-descriptions>
     </el-dialog>
@@ -285,7 +303,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage, type UploadFile, type UploadInstance } from 'element-plus'
+import { ElMessage, type UploadFile, type UploadInstance, ElMessageBox } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
 // 注意：必须用具名导出的 request()，它返回【已解包】的业务数据。
 // default 导出是裸 axios 实例（service），返回值仍裹着 {code,message,data} 一层，
@@ -337,6 +355,8 @@ interface ImportLog {
   status: string
   /** 1/true = 仅预览未写库；0/false = 已写入数据库 */
   dryRun?: number | boolean
+  /** 该批次在事实表中现有行数（回滚后为 0） */
+  rowsInFact?: number
   operator: string
   createdAt: string
 }
@@ -351,6 +371,7 @@ const result = ref<ImportResult | null>(null)
 const logs = ref<ImportLog[]>([])
 const logDetailVisible = ref(false)
 const logDetail = ref<Record<string, unknown> | null>(null)
+const rollbacking = ref(false)
 const selectedFile = ref<File | null>(null)
 
 const cleanRules = reactive({
@@ -485,6 +506,32 @@ async function doImport() {
     /* 拦截器已提示 */
   } finally {
     loading.value = false
+  }
+}
+
+
+async function doRollback() {
+  if (!logDetail.value || !logDetail.value.id) return
+  try {
+    await ElMessageBox.confirm(
+      '确认删除该批次写入的全部数据行？此操作不可撤销。',
+      '回滚确认',
+      { type: 'warning', confirmButtonText: '确认回滚', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  rollbacking.value = true
+  try {
+    const res = await request<{ deletedRows: number; affectedBuildings: number }>({
+      url: `/import/logs/${logDetail.value.id}/rollback`,
+      method: 'post'
+    })
+    ElMessage.success(`已回滚：删除 ${res.deletedRows} 行，影响 ${res.affectedBuildings} 栋建筑`)
+    logDetail.value = null
+    await loadLogs()
+  } finally {
+    rollbacking.value = false
   }
 }
 

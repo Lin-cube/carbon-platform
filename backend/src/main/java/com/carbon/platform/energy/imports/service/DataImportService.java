@@ -527,7 +527,10 @@ public class DataImportService {
                         airTemp, humidity, supply, ret, occ,
                         // data_grade：用户导入的是实测数据，记为 A 级（有独立计量），
                         // 可参与异常检测。原先硬编码 'B' 会让导入数据被标记为「未评估」。
-                        "A"
+                        "A",
+                        // import_batch_no：写入批次号，使每行数据可追溯到具体批次，
+                        // 从而支持「按批次查询」与「按批次回滚」。初始数据集该列为 NULL。
+                        result.getBatchNo()
                 });
                 success++;
             } catch (Exception ex) {
@@ -572,9 +575,9 @@ public class DataImportService {
                            air_temperature_c, humidity_pct,
                            chw_supply_temp_c, chw_return_temp_c, occupancy_density,
                            equipment_status, anomaly_flag, anomaly_type, severity,
-                           data_quality_flag, data_quality_type, data_grade)
+                           data_quality_flag, data_quality_type, data_grade, import_batch_no)
                         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                                '正常', -1, '未评估', '未评估', -1, '未评估', ?)
+                                '正常', -1, '未评估', '未评估', -1, '未评估', ?, ?)
                         """, part);
             }
             result.setStatus(failed > 0 ? "部分成功" : "成功");

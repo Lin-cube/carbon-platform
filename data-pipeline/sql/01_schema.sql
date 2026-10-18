@@ -116,6 +116,9 @@ CREATE TABLE fact_energy_hourly (
     zscore              DECIMAL(14,3)         COMMENT '偏差得分（残差/阈值上限，>1 即越限）',
     meter_source        VARCHAR(32)           COMMENT '计量来源',
     data_grade          CHAR(1)               COMMENT '数据分级 A/B',
+    -- 导入批次号：使每行数据可追溯到具体导入批次，
+    -- 从而支持「按批次查询」与「按批次回滚」。NULL 表示来自初始数据集（非导入）。
+    import_batch_no     VARCHAR(64)           COMMENT '导入批次号（NULL=初始数据集）',
     PRIMARY KEY (id, stat_year, stat_month),
     -- 核心查询索引：按建筑+时间（最高频）、按时间+异常（告警看板）
     KEY idx_building_ts (building_id, ts),
@@ -124,7 +127,9 @@ CREATE TABLE fact_energy_hourly (
     KEY idx_site_ts (site_id, ts),
     KEY idx_quality (data_quality_flag, ts),
     -- 覆盖索引：异常统计查询只需扫描索引，避免 600 万次回表
-    KEY idx_anomaly_cover (anomaly_flag, stat_year, ts, data_quality_flag)
+    KEY idx_anomaly_cover (anomaly_flag, stat_year, ts, data_quality_flag),
+    -- 批次追溯/回滚用
+    KEY idx_import_batch (import_batch_no)
 ) ENGINE=InnoDB COMMENT='统一能耗数据集（小时级）'
 PARTITION BY RANGE (stat_year * 100 + stat_month) (
     PARTITION p201601 VALUES LESS THAN (201602),
