@@ -49,6 +49,8 @@ public class DataImportService {
     private final FieldMappingPlanner mappingPlanner;
     /** 导入后增量刷新预聚合表（否则看板看不到新数据） */
     private final AggregateRefreshService aggregateRefreshService;
+    /** 导入后需要清空看板 AI 解读缓存，否则解读仍基于旧数据 */
+    private final com.carbon.platform.ai.service.DashboardInsightService dashboardInsightService;
 
     @Value("${carbon.import.tmp-dir:.import-tmp}")
     private String tmpDir;
@@ -624,6 +626,8 @@ public class DataImportService {
             // 数据变更后主动失效看板概览缓存，使导入结果立即反映到监控看板
             try {
                 com.carbon.platform.common.controller.HealthController.invalidateOverviewCache();
+                // 看板 AI 解读也基于聚合指标，数据变了必须一并失效
+                dashboardInsightService.invalidate();
             } catch (Exception ignore) {
                 // 缓存失效失败不影响导入
             }

@@ -28,12 +28,24 @@ import java.util.Map;
 public class AiController {
 
     private final AiServiceClient aiServiceClient;
+    private final com.carbon.platform.ai.service.DashboardInsightService dashboardInsightService;
 
     @Operation(summary = "自然语言问答（小E 助手）")
     @PostMapping("/chat")
     @OperLog(title = "AI-问答", businessType = OperLog.BusinessType.QUERY)
     public R<ChatResponse> chat(@Valid @RequestBody ChatRequest request) {
         return R.ok(aiServiceClient.chat(request));
+    }
+
+    @Operation(summary = "看板 AI 文字解读（只送聚合指标，不送明细数据）")
+    @PostMapping("/insight")
+    @OperLog(title = "AI-看板解读", businessType = OperLog.BusinessType.QUERY)
+    public R<Map<String, Object>> insight(@RequestBody Map<String, String> body) {
+        return R.ok(dashboardInsightService.insight(
+                body.getOrDefault("startDate", "2016-01-01"),
+                body.getOrDefault("endDate", "2016-12-31"),
+                body.get("siteId"),
+                body.get("buildingType")));
     }
 
     @Operation(summary = "能耗异常智能诊断")

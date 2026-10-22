@@ -113,6 +113,41 @@
           </el-table-column>
         </el-table>
       </div>
+
+      <!-- ============ AI 看板解读 ============
+           把已算好的聚合指标交给大模型写成文字解读。
+           注意：只送约 200 字的指标摘要，不送任何明细数据；
+           相同筛选条件 10 分钟内复用缓存，避免重复计费。 -->
+      <div class="chart-box ai-insight-box">
+        <div class="chart-title ai-insight-title">
+          <span>
+            AI 看板解读
+            <el-tag v-if="insight" size="small" :type="insight.mode === 'llm' ? 'success' : 'info'"
+                    effect="plain" class="ml-8">
+              {{ insight.mode === 'llm' ? `${insight.provider} / ${insight.model}` : '规则模式' }}
+            </el-tag>
+            <el-tag v-if="insight?.cached" size="small" type="info" effect="plain" class="ml-8">
+              缓存命中
+            </el-tag>
+          </span>
+          <el-button size="small" text type="primary" :loading="insightLoading" @click="loadInsight(true)">
+            {{ insightLoading ? '生成中…' : '重新生成' }}
+          </el-button>
+        </div>
+
+        <div v-loading="insightLoading" class="ai-insight-body">
+          <template v-if="insight">
+            <p v-for="(para, i) in insightParagraphs" :key="i" class="ai-insight-para">{{ para }}</p>
+            <div class="ai-insight-meta">
+              生成于 {{ insight.generatedAt }}　·　提示词 {{ insight.promptChars }} 字
+              　·　仅传输聚合指标，不含原始明细　·　缓存 {{ Math.round((insight.ttlSeconds || 600) / 60) }} 分钟
+            </div>
+          </template>
+          <div v-else-if="!insightLoading" class="ai-insight-empty">
+            暂无解读，点击「重新生成」获取
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -123,6 +158,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Download } from '@element-plus/icons-vue'
 import EChart from '@/components/EChart.vue'
 import { energyApi, analyticsApi, systemApi } from '@/api'
+import { request } from '@/api/request'
 import { useAppStore } from '@/stores/app'
 import { fmtNum, fmtInt, type EChartsOption } from '@/utils/echarts'
 import type {
@@ -141,6 +177,53 @@ const anomaly = ref<AnomalyAnalysisVO | null>(null)
 const granularity = ref<'daily' | 'monthly'>('daily')
 const range = ref<[string, string]>([app.startDate, app.endDate])
 const gradeDist = ref<{ grade: string; count: number }[]>([])
+
+interface InsightVO {
+  text: string
+  mode: string
+  cached: boolean
+  provider: string
+  model: string
+  promptChars: number
+  generatedAt: string
+  ttlSeconds?: number
+}
+const insight = ref<InsightVO | null>(null)
+const insightLoading = ref(false)
+
+/** 把 AI 返回的多段文本切分成段落，便于排版 */
+const insightParagraphs = computed(() =>
+  (insight.value?.text || '')
+    .split(/\n{2,}|\n/)
+    .map((t: string) => t.trim())
+    .filter(Boolean)
+)
+
+/**
+ * 加载 AI 看板解读。
+ * 缓存 key 是筛选条件，同一条件 10 分钟内服务端直接复用，不会重复产生 token 费用。
+ */
+async function loadInsight(force = false) {
+  if (insightLoading.value) return
+  insightLoading.value = true
+  try {
+    const [s, e] = range.value
+    insight.value = await request<InsightVO>({
+      url: '/ai/insight',
+      method: 'post',
+      data: {
+        startDate: s, endDate: e,
+        siteId: app.siteId || undefined,
+        buildingType: app.buildingType || undefined
+      }
+    })
+    if (force) ElMessage.success('解读已更新')
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    insightLoading.value = false
+  }
+}
 
 const query = () => ({
   startDate: app.startDate,
@@ -351,6 +434,8 @@ async function onExport() {
 }
 
 onMounted(async () => {
+  // AI 解读不阻塞首屏：先渲染图表，再异步请求文字解读
+  void loadInsight()
   try {
     const [s, buildings] = await Promise.all([
       energyApi.sites(),
@@ -370,5 +455,46 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.ai-insight-box {
+  /* 所在容器是 .grid-2（auto-fit minmax(420px,1fr)），
+     不加这条会被挤到第三列，文字过窄难读。让它独占整行。 */
+  grid-column: 1 / -1;
+  margin-top: 0;
+}
+.ai-insight-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.ml-8 {
+  margin-left: 8px;
+}
+.ai-insight-body {
+  min-height: 120px;
+  padding: 4px 2px;
+}
+.ai-insight-para {
+  margin: 0 0 12px;
+  line-height: 1.9;
+  font-size: 14px;
+  color: #2c3e50;
+  text-indent: 2em;
+}
+.ai-insight-para:last-of-type {
+  margin-bottom: 6px;
+}
+.ai-insight-meta {
+  font-size: 12px;
+  color: #909399;
+  border-top: 1px dashed #ebeef5;
+  padding-top: 8px;
+}
+.ai-insight-empty {
+  color: #909399;
+  font-size: 13px;
+  padding: 24px 0;
+  text-align: center;
+}
+
 .text-danger { color: #ef4444; font-weight: 600; }
 </style>
