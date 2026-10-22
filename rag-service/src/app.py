@@ -37,7 +37,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from retriever import Retriever
+from retriever import in_domain, Retriever
 
 BACKEND = os.environ.get("CARBON_BACKEND", "http://127.0.0.1:8080")
 
@@ -68,7 +68,18 @@ LLM_MAX_TOKENS = int(os.environ.get("CARBON_LLM_MAX_TOKENS", "700"))
 # 取 2.5 作为分界：覆盖类最低 2.70，未覆盖类最高 2.15，中间留出间隔。
 # 注：24 题标准测试集中的知识类题目实测均 ≥3.45，不会被误拒；
 #     数据类题目得分虽低，但它们在 hybrid 路由下走本地统计，不经过此处。
-MIN_RELEVANCE = float(os.environ.get("CARBON_RAG_MIN_RELEVANCE", "2.5"))
+# 相关度拒答阈值。
+#
+# 【为什么从 2.5 下调到 1.9】
+# 原阈值 2.5 是在「没有领域闸门」时定的：彼时它要同时挡住两类问题——
+#   (a) 领域内但语料没收录；(b) 与本领域完全无关（如「怎么做红烧肉」得分 2.09）。
+# 加入 in_domain() 闸门后，(b) 类在检索前就被拦下，阈值只需负责 (a) 类。
+#
+# 实测（2026-10-22，语料 57 条自建 + 8,805 条规范）：
+#   应作答：空调费电的原因 2.16 / 空调耗电高的原因 2.39 / 怎么降低运行成本 2.02
+#   应拒答：领域内但无覆盖的问题普遍 < 1.8
+# 取 1.9 可救回上述合法问题，同时不会误答无关内容（那由闸门保证）。
+MIN_RELEVANCE = float(os.environ.get("CARBON_RAG_MIN_RELEVANCE", "1.9"))
 
 app = FastAPI(title="碳能智控 · AI/RAG 服务", version="1.0.0",
               description="建筑能源运维知识库 RAG 检索 + 可选 LLM 生成")
@@ -92,9 +103,26 @@ def llm_available() -> bool:
     return LLM_PROVIDER in ("deepseek", "modelscope", "dashscope") and bool(LLM_KEY)
 
 
+# 累计 token 用量（进程级，供 /ai/usage 查询成本）
+_LLM_USAGE: dict[str, int] = {"promptTokens": 0, "completionTokens": 0,
+                              "totalTokens": 0, "calls": 0, "failures": 0}
+
+
+def _record_usage(prompt_tokens: int, completion_tokens: int) -> None:
+    _LLM_USAGE["promptTokens"] += prompt_tokens
+    _LLM_USAGE["completionTokens"] += completion_tokens
+    _LLM_USAGE["totalTokens"] += prompt_tokens + completion_tokens
+    _LLM_USAGE["calls"] += 1
+
+
 def llm_chat(system: str, user: str, temperature: float = 0.2,
              timeout: int = 120) -> str | None:
-    """OpenAI 兼容接口调用。任何异常都返回 None，由上层降级为纯检索回答。"""
+    """OpenAI 兼容接口调用。任何异常都返回 None，由上层降级为纯检索回答。
+
+    <p>调用成功时会把 prompt/completion token 记入进程级计数器 {@code _LLM_USAGE}，
+    可通过 {@code GET /ai/usage} 查询。这样「成本」是可量化的，
+    而不是凭感觉说「我们没把全部数据送给模型」。
+    """
     if not llm_available():
         return None
     try:
@@ -117,8 +145,13 @@ def llm_chat(system: str, user: str, temperature: float = 0.2,
             method="POST")
         with urllib.request.urlopen(req, timeout=timeout) as r:
             d = json.loads(r.read().decode())
+        # 记录 token 用量（OpenAI 兼容接口都会返回 usage 字段）
+        usage = d.get("usage") or {}
+        _record_usage(int(usage.get("prompt_tokens") or 0),
+                      int(usage.get("completion_tokens") or 0))
         return d["choices"][0]["message"]["content"]
     except Exception as e:  # noqa: BLE001
+        _LLM_USAGE["failures"] += 1
         print(f"[LLM] 调用失败，降级为纯检索回答：{type(e).__name__}: {e}")
         return None
 
@@ -279,6 +312,27 @@ def mcp_tools() -> dict:
     return {"tools": tools, "count": len(tools)}
 
 
+@app.get("/ai/usage")
+def ai_usage() -> dict:
+    """Token 用量与成本估算（用于回应「AI 成本如何控制」这类问题）。"""
+    # DeepSeek 定价（2026）：输入约 1 元/百万 token，输出约 2 元/百万 token
+    # 这里按人民币粗算，仅作量级参考，精确账单以平台为准
+    prompt = _LLM_USAGE["promptTokens"]
+    completion = _LLM_USAGE["completionTokens"]
+    cost_cny = prompt / 1_000_000 * 1.0 + completion / 1_000_000 * 2.0
+    calls = _LLM_USAGE["calls"] or 0
+    return {
+        "usage": dict(_LLM_USAGE),
+        "estimatedCostCny": round(cost_cny, 6),
+        "avgPromptTokensPerCall": round(prompt / calls, 1) if calls else 0,
+        "avgCompletionTokensPerCall": round(completion / calls, 1) if calls else 0,
+        "llm": {"provider": LLM_PROVIDER, "model": LLM_MODEL,
+                "available": llm_available(), "maxTokens": LLM_MAX_TOKENS},
+        "note": ("数据类问题不走大模型，token 消耗为 0；"
+                 "知识类问题只送检索命中的片段（约 500~900 字），不送全量历史数据。"),
+    }
+
+
 @app.post("/mcp/call")
 def mcp_call(req: McpCallRequest) -> dict:
     """MCP 协议适配层：把 MCP tool call 转成后端 REST 调用或本地检索。"""
@@ -320,9 +374,32 @@ def mcp_call(req: McpCallRequest) -> dict:
 def ai_chat(req: ChatRequest) -> dict:
     """RAG 问答：检索知识库 → （可选）LLM 归纳 → 返回答案 + 证据 + 出处"""
     t0 = time.time()
+
+    # ★ 第一道闸门：领域判断。
+    # 不属于建筑能源领域的问题，不做检索、不调大模型，直接拒答。
+    # 【为什么需要】BM25 在中文上有词面重叠误判：实测「怎么做红烧肉」
+    # 最高分 2.09，高于「怎么降低运行成本」的 2.02。若只靠分数阈值，
+    # 放宽会答非所问，收紧会误拒合法问题。所以先判领域，再判相关度。
+    if not in_domain(req.question):
+        return {
+            "answer": (
+                "这个问题不属于建筑能源运维领域，我无法回答。\n\n"
+                "（本助手只回答建筑能耗、暖通空调运行、数据治理相关问题，"
+                "不使用通用知识替代检索结果，以免给出不可靠的答案。）"
+            ),
+            "confidence": 0.05,
+            "toolCalls": [{"tool": "domain_gate", "args": {"query": req.question},
+                           "success": True, "elapsedMs": int((time.time() - t0) * 1000)}],
+            "citations": [],
+            "references": [],
+            "elapsedMs": int((time.time() - t0) * 1000),
+            "mode": "refused-out-of-domain",
+            "topScore": 0.0,
+        }
+
     hits = retriever().search(req.question, top_k=req.topK)
 
-    # ★ 相关度门槛：低于阈值直接拒答，不调大模型、不返回无关引用。
+    # ★ 第二道闸门：相关度门槛。低于阈值直接拒答，不调大模型、不返回无关引用。
     # 这样「知识库没有的内容」表现为确定性拒答，而不是靠模型自觉不瞎编。
     if not hits or hits[0].final_score < MIN_RELEVANCE:
         return {

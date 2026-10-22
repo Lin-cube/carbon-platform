@@ -316,6 +316,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAppStore } from '@/stores/app'
 import { ElMessage, type UploadFile, type UploadInstance, ElMessageBox } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
 // 注意：必须用具名导出的 request()，它返回【已解包】的业务数据。
@@ -386,6 +388,9 @@ const logDetailVisible = ref(false)
 const logDetail = ref<Record<string, unknown> | null>(null)
 const rollbacking = ref(false)
 const exporting = ref(false)
+
+const router = useRouter()
+const app = useAppStore()
 const selectedFile = ref<File | null>(null)
 
 const cleanRules = reactive({
@@ -516,6 +521,7 @@ async function doImport() {
     ElMessage.success(`导入完成：成功 ${result.value?.successRows ?? 0} 行`)
     step.value = 4
     await loadLogs()
+    await offerRangeSwitch(result.value?.batchNo)
   } catch {
     /* 拦截器已提示 */
   } finally {
@@ -524,6 +530,53 @@ async function doImport() {
 }
 
 
+
+/**
+ * 导入完成后，主动询问是否把全局日期范围切到本批次的数据范围。
+ *
+ * <p>【为什么需要】前端全局日期默认是 2016 年（BDG2 数据集的范围）。
+ * 如果用户导入的是 2019 年的数据，看板按 2016 年查，自然一片空白，
+ * 用户会误以为「数据没导入进去」。实测过这个误解。
+ *
+ * <p>本函数从批次追溯接口取回该批次的真实起止日期，让用户一键跳转查看。
+ */
+async function offerRangeSwitch(batchNo?: string) {
+  if (!batchNo) return
+  try {
+    // 找到刚写入的批次 id
+    const logs = await request<Array<{ id: number; batchNo: string; dryRun?: number | boolean }>>({
+      url: '/import/logs',
+      method: 'get',
+      params: { limit: 10 }
+    })
+    const target = logs.find(l => l.batchNo === batchNo)
+    if (!target) return
+
+    const trace = await request<{ start?: string; end?: string; rowsInFact?: number }>({
+      url: `/import/logs/${target.id}/trace`,
+      method: 'get'
+    })
+    if (!trace?.start || !trace?.end) return
+
+    const start = String(trace.start).slice(0, 10)
+    const end = String(trace.end).slice(0, 10)
+    const rows = trace.rowsInFact ?? 0
+    if (rows <= 0) return
+
+    await ElMessageBox.confirm(
+      `本批次数据的时间范围是 ${start} 至 ${end}（库中 ${rows} 行）。\n` +
+      `当前全局日期范围是 ${app.startDate} 至 ${app.endDate}，若与该范围不重叠，监控看板与能耗查询会显示为空。\n\n` +
+      `是否切换到本批次的时间范围并前往看板查看？`,
+      '导入成功 · 查看数据',
+      { type: 'success', confirmButtonText: '切换并查看看板', cancelButtonText: '留在本页' }
+    ).then(() => {
+      app.setRange(start, end)
+      router.push('/dashboard')
+    }).catch(() => { /* 用户选择留在本页 */ })
+  } catch {
+    /* 追溯失败不影响导入结果 */
+  }
+}
 
 /** 跳到审计页（第 5 步）并刷新列表 */
 async function openAudit() {

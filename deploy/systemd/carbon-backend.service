@@ -15,13 +15,12 @@ WorkingDirectory=/opt/carbon-platform
 # 部署脚本已自动生成去掉了 export 的版本（secrets/local.env.systemd）。
 EnvironmentFile=/opt/carbon-platform/secrets/local.env.systemd
 
-# 堆内存：2G 机器用 512m，4G 机器可调到 768m~1g。
-# 实测本项目默认堆 597MB，压到 384m 仍可正常工作；
-# SerialGC 在小内存 + 单核场景比 G1 省内存。
-ExecStart=/usr/bin/java \
-    -Xms256m -Xmx512m \
-    -XX:MaxMetaspaceSize=192m \
-    -XX:+UseSerialGC \
+# 堆内存由 secrets/local.env.systemd 里的 CARBON_JAVA_OPTS 控制：
+#   4G 机器 → -Xms256m -Xmx768m -XX:MaxMetaspaceSize=256m -XX:+UseG1GC
+#   2G 机器 → -Xms256m -Xmx512m -XX:MaxMetaspaceSize=192m -XX:+UseSerialGC
+# 实测本项目默认堆 597MB，压到 384m 仍可正常工作。
+# systemd 会展开 $CARBON_JAVA_OPTS（需先用 EnvironmentFile 定义）。
+ExecStart=/usr/bin/java $CARBON_JAVA_OPTS \
     -Duser.timezone=Asia/Shanghai \
     -jar /opt/carbon-platform/backend.jar
 

@@ -146,6 +146,17 @@ ENV
     echo "  ✅ 已写入数据库连接配置"
 fi
 
+# JVM 参数：按实际内存自动选择
+if ! grep -q "^CARBON_JAVA_OPTS" "$ENV_FILE"; then
+    if [ "$TOTAL_MEM_MB" -ge 3500 ]; then
+        OPTS="-Xms256m -Xmx768m -XX:MaxMetaspaceSize=256m -XX:+UseG1GC"
+    else
+        OPTS="-Xms256m -Xmx512m -XX:MaxMetaspaceSize=192m -XX:+UseSerialGC"
+    fi
+    echo "CARBON_JAVA_OPTS=${OPTS}" >> "$ENV_FILE"
+    echo "  ✅ JVM 参数（按 ${TOTAL_MEM_MB}MB 内存选择）: $OPTS"
+fi
+
 if ! grep -q "^CARBON_JWT_SECRET" "$ENV_FILE"; then
     JWT=$(openssl rand -base64 48 | tr -d '\n/+=' | head -c 48)
     echo "CARBON_JWT_SECRET=${JWT}" >> "$ENV_FILE"
