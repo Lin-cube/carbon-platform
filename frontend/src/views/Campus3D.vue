@@ -54,10 +54,18 @@
         <span>建筑数</span><b>{{ blobs.length }}</b>
       </div>
       <div class="stat-row">
-        <span>年用电量</span><b>{{ fmtNum(siteStat.electricity) }} kWh</b>
+        <el-tooltip placement="left" raw-content
+                    content="按建筑实际数据小时数年化到 8760 小时<br/>（非选定区间的实际累计值）">
+          <span class="dotted">年化用电量</span>
+        </el-tooltip>
+        <b>{{ fmtNum(siteStat.electricity) }} kWh</b>
       </div>
       <div class="stat-row">
-        <span>年碳排</span><b>{{ fmtNum(siteStat.carbon) }} kgCO₂</b>
+        <el-tooltip placement="left" raw-content
+                    content="按建筑实际数据小时数年化到 8760 小时">
+          <span class="dotted">年化碳排</span>
+        </el-tooltip>
+        <b>{{ fmtNum(siteStat.carbon) }} kgCO₂</b>
       </div>
       <div class="stat-row">
         <span>异常建筑</span>
@@ -103,6 +111,27 @@
     <!-- 3D 画布 -->
     <div ref="canvasHost" class="canvas-host"></div>
 
+    <!-- 右下角 AI 解读（可折叠，不遮挡画布） -->
+    <div class="ai-float" :class="{ collapsed: !aiOpen }">
+      <div class="ai-float-head" @click="aiOpen = !aiOpen">
+        <span class="ai-float-title">
+          <el-icon><MagicStick /></el-icon>
+          AI 园区解读
+          <span v-if="siteId" class="ai-float-site">{{ siteId }}</span>
+        </span>
+        <el-icon class="ai-float-toggle"><component :is="aiOpen ? 'ArrowDown' : 'ArrowUp'" /></el-icon>
+      </div>
+      <div v-show="aiOpen" class="ai-float-body">
+        <AiInsight
+          scope="campus"
+          title="当前园区"
+          :site-id="siteId"
+          :show-meta="false"
+          @focus-building="onFocusBuilding"
+        />
+      </div>
+    </div>
+
     <!-- 加载/空状态 -->
     <div v-if="loading" class="canvas-mask"><el-icon class="is-loading" :size="26"><Loading /></el-icon>
       <div>正在构建 3D 场景…</div>
@@ -113,10 +142,13 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, reactive, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { Close, Loading } from '@element-plus/icons-vue'
 import { energyApi } from '@/api'
+import AiInsight from '@/components/AiInsight.vue'
+import { MagicStick, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import { fmtNum, gradeColor } from '@/utils/echarts'
 import type { BuildingRow, SiteRow } from '@/types/api'
 
@@ -125,6 +157,13 @@ const router = useRouter()
 const canvasHost = ref<HTMLDivElement>()
 const sites = ref<SiteRow[]>([])
 const siteId = ref('')
+/** AI 解读悬浮面板是否展开 */
+const aiOpen = ref(true)
+
+/** 点击 AI 解读里的异常建筑 → 跳到异常诊断页并自动诊断该建筑 */
+function onFocusBuilding(buildingId: string) {
+  router.push({ path: '/anomaly', query: { buildingId } })
+}
 const buildings = ref<BuildingRow[]>([])
 const loading = ref(false)
 const colorBy = ref<'grade' | 'eui' | 'anomaly'>('grade')
@@ -477,7 +516,19 @@ function gotoAnomaly() {
 
 onMounted(async () => {
   await nextTick()
-  initThree()
+
+  // 【为什么单独 try】initThree() 依赖 WebGL。若浏览器禁用了硬件加速、
+  // 显卡驱动异常，或运行在无头环境里，它会抛异常。
+  // 原实现把 initThree() 放在 try 外面，一旦抛错整个 onMounted 中断，
+  // 结果是：园区下拉永远是「请选择」、园区概览全是 0、右侧 AI 解读变空白。
+  // 实测在无头 Chrome 中复现。现在即使 3D 初始化失败，数据与文字解读仍可用。
+  try {
+    initThree()
+  } catch (e) {
+    console.error('3D 场景初始化失败（可能是 WebGL 不可用）：', e)
+    ElMessage.warning('3D 场景初始化失败，可能是浏览器禁用了 WebGL；数据面板仍可正常使用')
+  }
+
   try {
     sites.value = await energyApi.sites()
     if (sites.value.length > 0) {
@@ -486,7 +537,9 @@ onMounted(async () => {
       siteId.value = best.siteId
       await rebuild()
     }
-  } catch { /* 忽略 */ }
+  } catch (e) {
+    console.error('园区数据加载失败：', e)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -508,6 +561,77 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.dotted {
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.35);
+  cursor: help;
+}
+
+/* 右下角 AI 解读悬浮卡 */
+.ai-float {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  width: 460px;
+  max-height: 46vh;
+  display: flex;
+  flex-direction: column;
+  background: rgba(255, 255, 255, 0.97);
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
+  z-index: 10;
+  overflow: hidden;
+  transition: max-height 0.25s ease;
+}
+.ai-float.collapsed {
+  max-height: 44px;
+}
+.ai-float-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid #ebeef5;
+  background: linear-gradient(90deg, #f0f7ff, #ffffff);
+  flex-shrink: 0;
+}
+.ai-float-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f2d3d;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-float-site {
+  font-weight: 400;
+  color: #409eff;
+  font-size: 12px;
+}
+.ai-float-toggle {
+  color: #909399;
+}
+.ai-float-body {
+  overflow-y: auto;
+  padding: 8px 12px 12px;
+}
+/* 覆盖组件内部的卡片外壳，融入悬浮面板 */
+.ai-float-body :deep(.chart-box) {
+  box-shadow: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+}
+.ai-float-body :deep(.chart-title) {
+  display: none;
+}
+.ai-float-body :deep(.ai-insight-para) {
+  font-size: 13px;
+  line-height: 1.8;
+  margin-bottom: 10px;
+}
+
 .campus-wrap {
   position: relative;
   width: 100%;

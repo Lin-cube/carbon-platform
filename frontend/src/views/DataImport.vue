@@ -519,6 +519,9 @@ async function doImport() {
       }
     })
     ElMessage.success(`导入完成：成功 ${result.value?.successRows ?? 0} 行`)
+    // ★ 通知全站数据已变更：看板 / 3D园区 / 异常诊断的 AI 解读会因此重新生成，
+    //   避免停留在旧数据的结论上（这正是「实时更新」的实现方式）。
+    app.bumpDataVersion()
     step.value = 4
     await loadLogs()
     await offerRangeSwitch(result.value?.batchNo)

@@ -194,6 +194,16 @@
               {{ f.text }}
             </el-descriptions-item>
           </el-descriptions>
+
+          <!-- AI 证据链解读：把上面的异常对比与归因串成一段可读的推理 -->
+          <AiInsight
+            ref="diagnosisInsightRef"
+            class="mt-12"
+            scope="diagnosis"
+            title="AI 证据链解读"
+            :building-id="current?.buildingId || ''"
+            :auto="false"
+          />
         </template>
         <el-empty v-else-if="!diagLoading" description="暂无诊断结果" />
       </div>
@@ -254,6 +264,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { analyticsApi, energyApi } from '@/api'
+import AiInsight from '@/components/AiInsight.vue'
 import { useAppStore } from '@/stores/app'
 import { fmtNum, fmtInt } from '@/utils/echarts'
 import type {
@@ -282,6 +293,8 @@ const total = ref(0)
 const diagnoseVisible = ref(false)
 const suggestVisible = ref(false)
 const diagLoading = ref(false)
+/** AI 证据链解读组件引用：拿到诊断数据后再触发，避免用空条件请求 */
+const diagnosisInsightRef = ref<InstanceType<typeof AiInsight> | null>(null)
 const sugLoading = ref(false)
 const diagnose = ref<DiagnoseResult | null>(null)
 const suggest = ref<SuggestResult | null>(null)
@@ -440,6 +453,8 @@ async function openDiagnose(row: AnomalyEvent) {
       startDate: app.startDate,
       endDate: app.endDate
     })
+    // 诊断数据就绪后再生成 AI 证据链解读（此时条件完整）
+    void diagnosisInsightRef.value?.load()
   } catch {
     diagnose.value = null
   } finally {

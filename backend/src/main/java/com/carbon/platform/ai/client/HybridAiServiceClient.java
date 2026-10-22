@@ -158,7 +158,42 @@ public class HybridAiServiceClient implements AiServiceClient {
             return r;
         }
         log.debug("数据类问题，走本地统计引擎：{}", request.getQuestion());
-        return localEngine.chat(request);
+        ChatResponse local = localEngine.chat(request);
+
+        // ★ 兜底升级：本地引擎识别不出意图时，不要直接返回"我能帮你做…"的问候，
+        // 而是再问一次 RAG。RAG 有领域闸门：领域内能答就答，领域外给出明确拒绝理由。
+        // 【为什么改】实测「帮我写一首诗」「股票会涨吗」原本返回能力菜单，
+        // 用户观感是"什么都不答"；改后要么给出答案，要么给出清楚的拒绝原因。
+        if (isNoIntentGreeting(local)) {
+            log.info("本地引擎未识别意图，转 RAG 判定：{}", request.getQuestion());
+            ChatResponse rag = ragEngine.chat(request);
+            if (rag != null && Boolean.TRUE.equals(rag.getOk())
+                    && rag.getAnswer() != null && !rag.getAnswer().isBlank()) {
+                return rag;
+            }
+        }
+        return local;
+    }
+
+    /**
+     * 判断本地引擎的返回是否为「未识别意图的问候」。
+     *
+     * <p>特征：答案里含固定的问候开场语，且工具链只有 query_dimensions
+     * （问候分支会挂一个查询维度清单的工具调用，所以不能只看 toolCalls 是否为空）。
+     */
+    private boolean isNoIntentGreeting(ChatResponse r) {
+        if (r == null || r.getAnswer() == null) {
+            return true;
+        }
+        String a = r.getAnswer();
+        if (!a.contains("我可以帮您") && !a.contains("我是「小E」")) {
+            return false;
+        }
+        if (r.getToolCalls() == null || r.getToolCalls().isEmpty()) {
+            return true;
+        }
+        return r.getToolCalls().stream()
+                .allMatch(t -> "query_dimensions".equals(t.getTool()));
     }
 
     @Override

@@ -37,15 +37,16 @@ public class AiController {
         return R.ok(aiServiceClient.chat(request));
     }
 
-    @Operation(summary = "看板 AI 文字解读（只送聚合指标，不送明细数据）")
+    @Operation(summary = "AI 文字解读（看板 / 3D园区 / 异常诊断，只送聚合指标）")
     @PostMapping("/insight")
     @OperLog(title = "AI-看板解读", businessType = OperLog.BusinessType.QUERY)
     public R<Map<String, Object>> insight(@RequestBody Map<String, String> body) {
         return R.ok(dashboardInsightService.insight(
+                body.getOrDefault("scope", "dashboard"),
                 body.getOrDefault("startDate", "2016-01-01"),
                 body.getOrDefault("endDate", "2016-12-31"),
                 body.get("siteId"),
-                body.get("buildingType")));
+                body.get("buildingId")));
     }
 
     @Operation(summary = "能耗异常智能诊断")

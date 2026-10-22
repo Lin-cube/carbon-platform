@@ -623,7 +623,18 @@ def main() -> int:
         evaluated_hours=("_evaluated", "sum"),
         total_hours=("anomaly_flag", "size"),
     ).reset_index()
-    n_years = max(df["year"].nunique(), 1)
+    # ⚠️ 年化口径修正（2026-10-22）
+    # 原写法 n_years = df["year"].nunique() 数的是「出现过的年份个数」：
+    # 数据跨 2016-01 ~ 2017-07 会被算成 2 年，而实际只有 1.5 年，
+    # 导致 electricity_kwh_year / EUI / 碳排全部低估 25%，
+    # 进而让能耗评级偏乐观（EUI 偏低 → 更容易评到 A/B）。
+    # 实测 Eagle 园区年化合计 5,418 万 vs 实际 2016 用电 7,234 万，差 25%。
+    #
+    # 改为按实际时间跨度年化：span 天 / 365.25。
+    # 与后端 AggregateRefreshService 导入重算的「kwh / hours × 8760」等价。
+    _ts = pd.to_datetime(df["timestamp"])
+    _span_days = max((_ts.max() - _ts.min()).total_seconds() / 86400.0, 1.0)
+    n_years = max(_span_days / 365.25, 1.0 / 12)   # 最少按 1 个月，避免除零放大
     dim["anomaly_rate"] = np.where(
         dim["evaluated_hours"] > 0, dim["anomaly_hours"] / dim["evaluated_hours"].replace(0, np.nan), np.nan
     )
