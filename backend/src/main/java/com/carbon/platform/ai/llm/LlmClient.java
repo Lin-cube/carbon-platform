@@ -33,4 +33,17 @@ public interface LlmClient {
      * @return 模型回复正文；失败返回 null（由上层决定降级）
      */
     String chat(String systemPrompt, String userPrompt, double temperature);
+
+    /**
+     * 按指定输出长度上限调用。
+     *
+     * <p><b>为什么需要</b>：LLM 延迟与生成长度近似线性。全局 max-tokens 默认 2000，
+     * 对「看板一句话解读」这种 200 字以内的任务来说太长，模型可能写 600 字，
+     * 白等 1 秒多。此重载允许按任务收紧上限。
+     *
+     * <p>默认实现忽略 maxTokens，保证既有实现类不受影响。
+     */
+    default String chat(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
+        return chat(systemPrompt, userPrompt, temperature);
+    }
 }

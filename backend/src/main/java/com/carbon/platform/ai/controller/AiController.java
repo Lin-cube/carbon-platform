@@ -46,7 +46,8 @@ public class AiController {
                 body.getOrDefault("startDate", "2016-01-01"),
                 body.getOrDefault("endDate", "2016-12-31"),
                 body.get("siteId"),
-                body.get("buildingId")));
+                body.get("buildingId"),
+                body.get("buildingType")));
     }
 
     @Operation(summary = "能耗异常智能诊断")

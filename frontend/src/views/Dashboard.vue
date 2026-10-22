@@ -119,6 +119,8 @@
         title="AI 看板解读"
         :start-date="range[0]"
         :end-date="range[1]"
+        :site-id="app.siteId"
+        :building-type="app.buildingType"
         @focus-building="onFocusBuilding"
       />
     </div>

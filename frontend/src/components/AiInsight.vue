@@ -34,7 +34,8 @@
         </div>
 
         <div v-if="showMeta" class="ai-insight-meta">
-          生成于 {{ insight.generatedAt }}　·　提示词 {{ insight.promptChars }} 字
+          生成于 {{ insight.generatedAt }}　·　本次耗时 {{ elapsedMs }}ms
+          　·　提示词 {{ insight.promptChars }} 字
           　·　仅传输聚合指标，不含原始明细
           　·　缓存 {{ Math.round((insight.ttlSeconds || 600) / 60) }} 分钟
         </div>
@@ -67,6 +68,7 @@ const props = withDefaults(defineProps<{
   scope?: 'dashboard' | 'campus' | 'diagnosis'
   siteId?: string
   buildingId?: string
+  buildingType?: string
   startDate?: string
   endDate?: string
   title?: string
@@ -77,6 +79,7 @@ const props = withDefaults(defineProps<{
   scope: 'dashboard',
   siteId: '',
   buildingId: '',
+  buildingType: '',
   startDate: '',
   endDate: '',
   title: 'AI 看板解读',
@@ -108,6 +111,8 @@ interface InsightVO {
 const app = useAppStore()
 const insight = ref<InsightVO | null>(null)
 const loading = ref(false)
+/** 本次请求耗时（毫秒），用于让用户直观看到生成速度 */
+const elapsedMs = ref(0)
 
 const paragraphs = computed(() =>
   (insight.value?.text || '')
@@ -136,6 +141,7 @@ function ready(): boolean {
 async function load(force = false) {
   if (!ready() || loading.value) return
   loading.value = true
+  const t0 = performance.now()
   try {
     const res = await request<InsightVO>({
       url: '/ai/insight',
@@ -145,7 +151,8 @@ async function load(force = false) {
         startDate: props.startDate || app.startDate,
         endDate: props.endDate || app.endDate,
         siteId: props.siteId || undefined,
-        buildingId: props.buildingId || undefined
+        buildingId: props.buildingId || undefined,
+        buildingType: props.buildingType || undefined
       }
     })
     insight.value = res
@@ -153,6 +160,7 @@ async function load(force = false) {
   } catch {
     /* 拦截器已提示 */
   } finally {
+    elapsedMs.value = Math.round(performance.now() - t0)
     loading.value = false
   }
 }
@@ -160,7 +168,7 @@ async function load(force = false) {
 /** 数据版本变化（导入新数据后）自动重新解读 */
 watch(() => app.dataVersion, () => { void load() })
 /** 筛选条件变化时重新解读 */
-watch(() => [props.siteId, props.buildingId, props.startDate, props.endDate],
+watch(() => [props.siteId, props.buildingId, props.buildingType, props.startDate, props.endDate],
   () => { void load() })
 
 onMounted(() => {

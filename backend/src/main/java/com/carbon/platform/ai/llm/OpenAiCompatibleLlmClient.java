@@ -91,6 +91,11 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
 
     @Override
     public String chat(String systemPrompt, String userPrompt, double temperature) {
+        return chat(systemPrompt, userPrompt, temperature, maxTokens);
+    }
+
+    @Override
+    public String chat(String systemPrompt, String userPrompt, double temperature, int limit) {
         if (!available()) {
             return null;
         }
@@ -99,7 +104,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
             body.put("model", model);
             body.put("temperature", temperature);
             body.put("stream", false);
-            body.put("max_tokens", maxTokens);
+            body.put("max_tokens", Math.max(limit, 64));
             // Qwen3 系列需要显式关闭思考模式，否则响应含 reasoning_content 且变慢
             if (model.toLowerCase().contains("qwen3")) {
                 body.putObject("chat_template_kwargs").put("enable_thinking", false);
