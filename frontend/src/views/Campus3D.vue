@@ -42,8 +42,8 @@
 
       <div class="hint">
         <div>· 左键拖拽旋转，滚轮缩放</div>
-        <div>· 点击楼栋查看详情</div>
-        <div>· 粒子流表示用能强度</div>
+        <div>· 悬停高亮，点击聚焦查看详情</div>
+        <div>· 高度为示意比例，非真实楼高</div>
       </div>
     </div>
 
@@ -111,6 +111,25 @@
     <!-- 3D 画布 -->
     <div ref="canvasHost" class="canvas-host"></div>
 
+    <!-- 悬停提示：跟随鼠标，不拦截事件 -->
+    <div v-if="hoverTip" class="hover-tip"
+         :style="{ left: hoverTip.x + 16 + 'px', top: hoverTip.y + 14 + 'px' }">
+      <div class="hover-tip-name">{{ hoverTip.name }}</div>
+      <div class="hover-tip-meta">
+        <span>{{ hoverTip.type }}</span>
+        <span class="hover-tip-grade">评级 {{ hoverTip.grade }}</span>
+      </div>
+    </div>
+
+    <!-- 右下角视角工具 -->
+    <div class="view-tools">
+      <el-tooltip content="恢复默认视角" placement="left">
+        <button class="tool-btn" type="button" @click="resetView">
+          <el-icon><Aim /></el-icon>
+        </button>
+      </el-tooltip>
+    </div>
+
     <!-- 右下角 AI 解读（可折叠，不遮挡画布） -->
     <div class="ai-float" :class="{ collapsed: !aiOpen }">
       <div class="ai-float-head" @click="aiOpen = !aiOpen">
@@ -145,11 +164,19 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { Close, Loading } from '@element-plus/icons-vue'
+import { Close, Loading, Aim } from '@element-plus/icons-vue'
 import { energyApi } from '@/api'
 import AiInsight from '@/components/AiInsight.vue'
 import { MagicStick, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import { fmtNum, gradeColor } from '@/utils/echarts'
+import {
+  PALETTE, GRADE_COLOR, EUI_COLOR, ANOMALY_COLOR, NEUTRAL,
+} from '@/three/palette'
+import { createEnvironment, type CampusEnvironment } from '@/three/environment'
+import {
+  createBuildingModel, applyGradeColor, setBuildingEmphasis,
+  footprintOf, type BuildingModel,
+} from '@/three/buildingModel'
 import type { BuildingRow, SiteRow } from '@/types/api'
 
 const router = useRouter()
@@ -179,23 +206,28 @@ const siteStat = reactive({
 const legendItems = computed(() => {
   if (colorBy.value === 'grade') {
     return [
-      { label: 'A 优秀', color: '#22c55e' }, { label: 'B 良好', color: '#84cc16' },
-      { label: 'C 一般', color: '#eab308' }, { label: 'D 较差', color: '#f97316' },
-      { label: 'E 差', color: '#ef4444' }, { label: '未评级', color: '#9ca3af' }
+      { label: 'A 优秀', color: GRADE_COLOR.A },
+      { label: 'B 良好', color: GRADE_COLOR.B },
+      { label: 'C 一般', color: GRADE_COLOR.C },
+      { label: 'D 较差', color: GRADE_COLOR.D },
+      { label: 'E 差', color: GRADE_COLOR.E },
+      { label: '未评级', color: NEUTRAL },
     ]
   }
   if (colorBy.value === 'anomaly') {
     return [
-      { label: '正常（<2%）', color: '#22c55e' },
-      { label: '轻度（2-5%）', color: '#eab308' },
-      { label: '偏高（5-10%）', color: '#f97316' },
-      { label: '严重（>10%）', color: '#ef4444' }
+      { label: '正常（<2%）', color: ANOMALY_COLOR[0].color },
+      { label: '轻度（2-5%）', color: ANOMALY_COLOR[1].color },
+      { label: '偏高（5-10%）', color: ANOMALY_COLOR[2].color },
+      { label: '严重（>10%）', color: ANOMALY_COLOR[3].color },
     ]
   }
   return [
-    { label: '低强度', color: '#22c55e' }, { label: '中低', color: '#84cc16' },
-    { label: '中等', color: '#eab308' }, { label: '较高', color: '#f97316' },
-    { label: '高强度', color: '#ef4444' }
+    { label: '低强度（<60）', color: EUI_COLOR[0].color },
+    { label: '中低（60-100）', color: EUI_COLOR[1].color },
+    { label: '中等（100-150）', color: EUI_COLOR[2].color },
+    { label: '较高（150-200）', color: EUI_COLOR[3].color },
+    { label: '高强度（>200）', color: EUI_COLOR[4].color },
   ]
 })
 
@@ -206,9 +238,16 @@ let camera: THREE.PerspectiveCamera | null = null
 let controls: OrbitControls | null = null
 let rafId = 0
 let resizeObserver: ResizeObserver | null = null
-/** 楼栋 mesh 与数据的映射（用于射线拾取） */
+/** 主体 mesh 与数据的映射（射线拾取用） */
 const meshMap = new Map<THREE.Mesh, BuildingRow>()
-let particleSystems: THREE.Points[] = []
+/** buildingId → 模型（用于换色与释放） */
+const modelMap = new Map<string, BuildingModel>()
+/** 园区环境（地面/道路/树木） */
+let env: CampusEnvironment | null = null
+/** 承载建筑与环境的根节点，重建时整体替换 */
+let campusGroup: THREE.Group | null = null
+/** 默认视角参数，供「恢复默认视角」使用 */
+let defaultCam = { pos: new THREE.Vector3(120, 110, 150), target: new THREE.Vector3(0, 0, 0) }
 
 function initThree() {
   if (!canvasHost.value) return
@@ -216,63 +255,97 @@ function initThree() {
   const w = host.clientWidth
   const h = host.clientHeight
 
+  // ── 场景：淡蓝灰背景 + 远处雾，拉出通透的空间层次 ──
   scene = new THREE.Scene()
-  scene.background = new THREE.Color(0x0b1220)
-  scene.fog = new THREE.Fog(0x0b1220, 260, 620)
+  scene.background = new THREE.Color(PALETTE.background)
+  scene.fog = new THREE.Fog(PALETTE.fog, PALETTE.fogNear, PALETTE.fogFar)
 
-  camera = new THREE.PerspectiveCamera(48, w / h, 0.5, 3000)
-  camera.position.set(120, 110, 150)
+  camera = new THREE.PerspectiveCamera(42, w / h, 0.5, 4000)
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
+  // ── 渲染器：抗锯齿 + 柔和阴影 + ACES 色调映射（浅色场景更通透）──
+  // preserveDrawingBuffer 仅在 ?capture=1 时开启：
+  // 无头浏览器截图需要它才能拿到 WebGL 帧内容；正常工作时不开启（有性能代价）
+  const captureMode = typeof location !== 'undefined' && location.search.includes('capture')
+  renderer = new THREE.WebGLRenderer({
+    antialias: true, alpha: false, preserveDrawingBuffer: captureMode,
+  })
   renderer.setSize(w, h)
+  // 设备像素比上限 2：高分屏不至于把填充率拉满
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
+  renderer.outputColorSpace = THREE.SRGBColorSpace
+  renderer.toneMapping = THREE.ACESFilmicToneMapping
+  renderer.toneMappingExposure = 1.04
   host.appendChild(renderer.domElement)
 
   controls = new OrbitControls(camera, renderer.domElement)
   controls.enableDamping = true
-  controls.dampingFactor = 0.08
-  controls.maxPolarAngle = Math.PI * 0.47
-  controls.minDistance = 30
-  controls.maxDistance = 700
+  controls.dampingFactor = 0.075
+  // 限制俯仰：不允许钻到地面以下，也不允许完全水平（保持"沙盘"观感）
+  controls.minPolarAngle = Math.PI * 0.12
+  controls.maxPolarAngle = Math.PI * 0.46
+  controls.minDistance = 40
+  controls.maxDistance = 900
+  controls.enablePan = true
+  controls.panSpeed = 0.8
 
-  // 光照
-  scene.add(new THREE.AmbientLight(0xffffff, 0.55))
-  const dir = new THREE.DirectionalLight(0xffffff, 1.0)
-  dir.position.set(160, 260, 120)
-  dir.castShadow = true
-  dir.shadow.mapSize.set(2048, 2048)
-  dir.shadow.camera.near = 1
-  dir.shadow.camera.far = 900
-  const d = 320
-  Object.assign(dir.shadow.camera, { left: -d, right: d, top: d, bottom: -d })
-  scene.add(dir)
-  const hemi = new THREE.HemisphereLight(0x8ec5ff, 0x0b1220, 0.45)
+  // ── 光照：柔和自然光 ──────────────────────────────────────────
+  // 半球光负责整体环境色（天空偏冷、地面反弹偏暖）
+  const hemi = new THREE.HemisphereLight(0xf3f7f8, 0xcfd8d3, 1.05)
   scene.add(hemi)
 
-  // 地面网格
-  const grid = new THREE.GridHelper(1400, 70, 0x1e3a5f, 0x14263f)
-  ;(grid.material as THREE.Material).transparent = true
-  ;(grid.material as THREE.Material).opacity = 0.55
-  scene.add(grid)
+  // 主方向光：产生柔和阴影，角度偏低让建筑有体积感
+  const sun = new THREE.DirectionalLight(0xfffaf0, 1.55)
+  sun.position.set(180, 300, 150)
+  sun.castShadow = true
+  // 阴影贴图 1024 足够，2048 在笔记本上开销翻倍且观感提升有限
+  sun.shadow.mapSize.set(1024, 1024)
+  sun.shadow.camera.near = 1
+  sun.shadow.camera.far = 1200
+  const sd = 360
+  sun.shadow.camera.left = -sd
+  sun.shadow.camera.right = sd
+  sun.shadow.camera.top = sd
+  sun.shadow.camera.bottom = -sd
+  sun.shadow.bias = -0.0006
+  sun.shadow.normalBias = 0.6
+  scene.add(sun)
 
-  // 地面反射底板
-  const plane = new THREE.Mesh(
-    new THREE.PlaneGeometry(1400, 1400),
-    new THREE.MeshStandardMaterial({ color: 0x0d1626, roughness: 0.95, metalness: 0.1 })
-  )
-  plane.rotation.x = -Math.PI / 2
-  plane.position.y = -0.6
-  plane.receiveShadow = true
-  scene.add(plane)
+  // 补一盏很弱的反向光，避免背光面死黑
+  const fill = new THREE.DirectionalLight(0xdfe9f0, 0.35)
+  fill.position.set(-160, 120, -140)
+  scene.add(fill)
+
+  // 建筑与环境的根节点
+  campusGroup = new THREE.Group()
+  campusGroup.name = 'campus-root'
+  scene.add(campusGroup)
 
   renderer.domElement.addEventListener('click', onCanvasClick)
+  renderer.domElement.addEventListener('pointermove', onPointerMove)
   window.addEventListener('resize', onResize)
   resizeObserver = new ResizeObserver(onResize)
   resizeObserver.observe(host)
 
   animate()
+
+  // CAPTURE-SNAPSHOT 临时：?capture=1 时把画布转成 <img> 覆盖在页面上。
+  // 无头 Chrome 不合成 WebGL 图层，只有转成图片才能截图验证；验证后删除。
+  if (captureMode) {
+    setTimeout(() => {
+      try {
+        const url = renderer!.domElement.toDataURL('image/png')
+        const img = document.createElement('img')
+        img.src = url
+        img.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;'
+          + 'object-fit:contain;z-index:9999;background:#ffffff'
+        document.body.appendChild(img)
+      } catch (e) {
+        console.error('snapshot failed', e)
+      }
+    }, 2500)
+  }
 }
 
 function onResize() {
@@ -288,200 +361,292 @@ function onResize() {
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 
-function onCanvasClick(ev: MouseEvent) {
-  if (!renderer || !camera) return
+/** 当前悬停的建筑模型（用于恢复上一个的高亮） */
+let hoveredModel: BuildingModel | null = null
+
+function pickAt(ev: PointerEvent | MouseEvent): BuildingRow | null {
+  if (!renderer || !camera) return null
   const rect = renderer.domElement.getBoundingClientRect()
   pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1
   pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
   const hits = raycaster.intersectObjects([...meshMap.keys()], false)
-  if (hits.length > 0) {
-    const mesh = hits[0].object as THREE.Mesh
-    const b = meshMap.get(mesh) || null
-    selected.value = b
-    // 高亮选中楼栋
-    meshMap.forEach((_, m) => {
-      const mat = m.material as THREE.MeshStandardMaterial
-      mat.emissiveIntensity = 0
-    })
-    const mat = mesh.material as THREE.MeshStandardMaterial
-    mat.emissive = new THREE.Color(0x2f7dff)
-    mat.emissiveIntensity = 0.55
-  } else {
-    selected.value = null
+  if (hits.length === 0) return null
+  return meshMap.get(hits[0].object as THREE.Mesh) ?? null
+}
+
+/** 悬停：轻微高亮 + 记录鼠标位置供 Tooltip 使用 */
+let hoverRaf = 0
+function onPointerMove(ev: PointerEvent) {
+  // 用 rAF 节流，避免 mousemove 高频触发射线拾取
+  if (hoverRaf) return
+  hoverRaf = requestAnimationFrame(() => {
+    hoverRaf = 0
+    if (!renderer) return
+    const b = pickAt(ev)
+    const model = b ? modelMap.get(b.buildingId) ?? null : null
+
+    if (model === hoveredModel) {
+      if (b) updateHoverTip(ev, b)
+      return
+    }
+    // 恢复上一个
+    if (hoveredModel) setBuildingEmphasis(hoveredModel, { highlight: false })
+    hoveredModel = model
+    if (model) {
+      setBuildingEmphasis(model, { highlight: true })
+      updateHoverTip(ev, b!)
+      renderer.domElement.style.cursor = 'pointer'
+    } else {
+      hoverTip.value = null
+      renderer.domElement.style.cursor = 'grab'
+    }
+    markDirty()
+  })
+}
+
+/** Tooltip 数据（模板里渲染成跟随鼠标的小卡片） */
+const hoverTip = ref<{ x: number; y: number; name: string; type: string; grade: string } | null>(null)
+
+function updateHoverTip(ev: PointerEvent, b: BuildingRow) {
+  hoverTip.value = {
+    x: ev.clientX, y: ev.clientY,
+    name: b.buildingId,
+    type: b.buildingTypeCn || '未标注类型',
+    grade: b.energyGrade || '未评级',
   }
+}
+
+function onCanvasClick(ev: MouseEvent) {
+  const b = pickAt(ev)
+  selected.value = b
+  if (!b) {
+    // 点击空白：清除聚焦，其他建筑恢复
+    setFocusTarget(null)
+    return
+  }
+  setFocusTarget(b.buildingId)
+}
+
+/** 选中某栋：其他建筑降低视觉权重，相机平滑聚焦 */
+function setFocusTarget(buildingId: string | null) {
+  for (const [id, model] of modelMap) {
+    const dim = !!buildingId && id !== buildingId
+    setBuildingEmphasis(model, { dim, highlight: id === buildingId })
+  }
+  const model = buildingId ? modelMap.get(buildingId) : null
+  if (model) focusCameraOn(model.group.position)
+  markDirty()
+}
+
+/** 相机平滑聚焦到某点（简单 lerp 缓动，不用外部补间库） */
+let focusAnim = 0
+function focusCameraOn(target: THREE.Vector3) {
+  if (!camera || !controls) return
+  cancelAnimationFrame(focusAnim)
+  const startPos = camera.position.clone()
+  const startTarget = controls.target.clone()
+  const dist = Math.max(60, camera.position.distanceTo(target) * 0.55)
+  const dir = camera.position.clone().sub(target).normalize()
+  const endPos = target.clone().add(dir.multiplyScalar(dist)).add(new THREE.Vector3(0, 18, 0))
+  const t0 = performance.now()
+  const dur = 620
+
+  const step = () => {
+    if (!camera || !controls) return
+    const p = Math.min(1, (performance.now() - t0) / dur)
+    // easeOutCubic
+    const e = 1 - Math.pow(1 - p, 3)
+    camera.position.lerpVectors(startPos, endPos, e)
+    controls.target.lerpVectors(startTarget, target, e)
+    controls.update()
+    markDirty()
+    if (p < 1) focusAnim = requestAnimationFrame(step)
+  }
+  focusAnim = requestAnimationFrame(step)
 }
 
 function clearScene() {
   if (!scene) return
-  meshMap.forEach((_, mesh) => {
-    scene!.remove(mesh)
-    mesh.geometry.dispose()
-    ;(mesh.material as THREE.Material).dispose()
-  })
-  meshMap.clear()
-  for (const ps of particleSystems) {
-    scene.remove(ps)
-    ps.geometry.dispose()
-    ;(ps.material as THREE.Material).dispose()
+  for (const model of modelMap.values()) {
+    model.group.removeFromParent()
+    model.dispose()
   }
-  particleSystems = []
+  modelMap.clear()
+  meshMap.clear()
+
+  if (env) {
+    env.group.removeFromParent()
+    env.dispose()
+    env = null
+  }
+  if (campusGroup) {
+    campusGroup.removeFromParent()
+    campusGroup = null
+  }
 }
 
 /** 计算某栋楼的颜色 */
 function colorOf(b: BuildingRow): string {
   if (colorBy.value === 'anomaly') {
-    const r = (b.anomalyRate ?? 0) * 100
-    if (r >= 10) return '#ef4444'
-    if (r >= 5) return '#f97316'
-    if (r >= 2) return '#eab308'
-    return '#22c55e'
+    const r = b.anomalyRate ?? 0
+    for (const seg of ANOMALY_COLOR) if (r < seg.max) return seg.color
+    return NEUTRAL
   }
   if (colorBy.value === 'eui') {
-    const e = b.euiKwhM2Year ?? 0
-    if (e >= 200) return '#ef4444'
-    if (e >= 150) return '#f97316'
-    if (e >= 100) return '#eab308'
-    if (e >= 60) return '#84cc16'
-    return '#22c55e'
+    const e = b.euiKwhM2Year
+    if (e == null) return NEUTRAL
+    for (const seg of EUI_COLOR) if (e < seg.max) return seg.color
+    return NEUTRAL
   }
-  return gradeColor(b.energyGrade)
+  return GRADE_COLOR[b.energyGrade || '未评级'] ?? NEUTRAL
 }
 
-/** 构建楼栋 */
+/** 构建园区（环境 + 微缩建筑）。顺序：先算布局，再建环境与建筑。 */
 function buildBuildings() {
-  if (!scene) return
+  if (!scene || !campusGroup) return
   clearScene()
+
+  // clearScene 会把 campusGroup 置空，这里重新挂一个根节点
+  campusGroup = new THREE.Group()
+  campusGroup.name = 'campus-root'
+  scene.add(campusGroup)
+
   const list = buildings.value
   if (list.length === 0) return
 
-  // 网格布局：接近正方形的行列
+  // 网格布局（示意布局：本项目无真实经纬度，不冒充地理模型）
   const cols = Math.ceil(Math.sqrt(list.length))
-  const gap = 34
+  const rows = Math.ceil(list.length / cols)
+  const gap = 44
 
-  const maxArea = Math.max(...list.map((b) => b.areaM2 || 1), 1)
+  const worldW = (cols - 1) * gap
+  const worldD = (rows - 1) * gap
+  // 沙盘半径：容纳所有建筑并留出绿化带
+  const radius = Math.max(worldW, worldD) / 2 + 62
+
+  // ── 环境（地面/道路/草坪/树木）──
+  env = createEnvironment({ radius })
+  campusGroup.add(env.group)
+
+  // ── 建筑 ──
   const maxEnergy = Math.max(...list.map((b) => b.electricityKwhYear || 1), 1)
 
   list.forEach((b, i) => {
     const row = Math.floor(i / cols)
     const col = i % cols
     const x = (col - (cols - 1) / 2) * gap
-    const z = (row - (Math.ceil(list.length / cols) - 1) / 2) * gap
+    const z = (row - (rows - 1) / 2) * gap
 
-    // 底面尺寸按面积开方（视觉上面积大 → 占地大）
-    const areaRatio = Math.sqrt((b.areaM2 || 100) / maxArea)
-    const baseW = 8 + areaRatio * 14
-    const baseD = baseW * 0.82
-
-    // 高度按所选维度
-    let hRatio: number
-    if (heightBy.value === 'energy') {
-      hRatio = Math.sqrt((b.electricityKwhYear || 0) / maxEnergy)
-    } else {
-      hRatio = areaRatio
-    }
-    const height = 6 + hRatio * 46
-
-    const geom = new THREE.BoxGeometry(baseW, height, baseD)
-    const col3 = new THREE.Color(colorOf(b))
-    const mat = new THREE.MeshStandardMaterial({
-      color: col3, roughness: 0.42, metalness: 0.28,
-      emissive: col3, emissiveIntensity: 0.04
-    })
-    const mesh = new THREE.Mesh(geom, mat)
-    mesh.position.set(x, height / 2, z)
-    mesh.castShadow = true
-    mesh.receiveShadow = true
-    mesh.userData.building = b
-    scene!.add(mesh)
-    meshMap.set(mesh, b)
-
-    // 楼顶轮廓线
-    const edges = new THREE.LineSegments(
-      new THREE.EdgesGeometry(geom),
-      new THREE.LineBasicMaterial({ color: 0x7dd3fc, transparent: true, opacity: 0.22 })
+    const gradeHex = colorOf(b)
+    const model = createBuildingModel(
+      { buildingId: b.buildingId, buildingTypeCn: b.buildingTypeCn, areaM2: b.areaM2 },
+      gradeHex,
     )
-    edges.position.copy(mesh.position)
-    scene!.add(edges)
+    model.group.position.set(x, 0, z)
+
+    // 「按高度表示」保留原有能力，但只做**整体体量缩放**，
+    // 不把能耗值当真实楼高（真实高度数据本项目没有）。
+    if (heightBy.value === 'energy') {
+      const ratio = Math.sqrt((b.electricityKwhYear || 0) / maxEnergy)
+      const k = 0.78 + ratio * 0.5      // 0.78 ~ 1.28，克制，不夸张
+      model.group.scale.set(1, k, 1)
+    }
+
+    campusGroup!.add(model.group)
+    modelMap.set(b.buildingId, model)
+    meshMap.set(model.body, b)
   })
 
-  // 粒子流：用能越强粒子越多（可视化"能量流动"）
-  const hot = list
-    .map((b, i) => ({ b, i }))
-    .sort((a, c) => (c.b.electricityKwhYear || 0) - (a.b.electricityKwhYear || 0))
-    .slice(0, 12)
+  // 默认视角：38° 俯视，正对园区中心
+  applyDefaultCamera(radius)
+  markDirty()
+}
 
-  for (const { b, i } of hot) {
-    const row = Math.floor(i / cols)
-    const col = i % cols
-    const x = (col - (cols - 1) / 2) * gap
-    const z = (row - (Math.ceil(list.length / cols) - 1) / 2) * gap
-    const areaRatio = Math.sqrt((b.areaM2 || 100) / maxArea)
-    const height = 6 + (heightBy.value === 'energy'
-      ? Math.sqrt((b.electricityKwhYear || 0) / maxEnergy)
-      : areaRatio) * 46
+/**
+ * 设置默认相机：38° 俯视 + 45° 方位角。
+ *
+ * <p>没有真实地理朝向，这里固定一个观感最舒服的角度；
+ * 「恢复默认视角」按钮复用同一套参数。
+ */
+function applyDefaultCamera(radius: number) {
+  if (!camera || !controls) return
+  const elevation = THREE.MathUtils.degToRad(36)
+  const azimuth = THREE.MathUtils.degToRad(45)
+  const dist = radius * 1.78
 
-    const count = 90
-    const positions = new Float32Array(count * 3)
-    const speeds = new Float32Array(count)
-    for (let k = 0; k < count; k++) {
-      positions[k * 3] = x + (Math.random() - 0.5) * 16
-      positions[k * 3 + 1] = Math.random() * (height + 30)
-      positions[k * 3 + 2] = z + (Math.random() - 0.5) * 16
-      speeds[k] = 0.25 + Math.random() * 0.6
-    }
-    const pg = new THREE.BufferGeometry()
-    pg.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-    pg.setAttribute('speed', new THREE.BufferAttribute(speeds, 1))
+  const pos = new THREE.Vector3(
+    Math.cos(elevation) * Math.cos(azimuth) * dist,
+    Math.sin(elevation) * dist,
+    Math.cos(elevation) * Math.sin(azimuth) * dist,
+  )
+  const target = new THREE.Vector3(0, 6, 0)
 
-    const pm = new THREE.PointsMaterial({
-      color: new THREE.Color(colorOf(b)).offsetHSL(0, 0, 0.25),
-      size: 1.5, transparent: true, opacity: 0.85,
-      blending: THREE.AdditiveBlending, depthWrite: false
-    })
-    const points = new THREE.Points(pg, pm)
-    points.userData.baseY = height
-    scene!.add(points)
-    particleSystems.push(points)
-  }
+  camera.position.copy(pos)
+  controls.target.copy(target)
+  controls.update()
+
+  defaultCam = { pos: pos.clone(), target: target.clone() }
+}
+
+/** 恢复默认视角 */
+function resetView() {
+  if (!camera || !controls) return
+  camera.position.copy(defaultCam.pos)
+  controls.target.copy(defaultCam.target)
+  controls.update()
+}
+
+/**
+ * 渲染循环。
+ *
+ * <p>【性能要点】原实现每帧都在 CPU 上遍历粒子更新位置，并全速重绘，
+ * 即使画面完全静止。现在：
+ * <ul>
+ *   <li>删除粒子系统（业务意义不足且持续消耗 CPU）；</li>
+ *   <li>只在「相机在动 / 有阻尼未收敛 / 场景被标记为脏」时才真正 render；</li>
+ *   <li>阻尼收敛后自动停机，笔记本电脑不会持续发热。</li>
+ * </ul>
+ */
+let needsRender = true
+
+function markDirty() {
+  needsRender = true
 }
 
 function animate() {
   rafId = requestAnimationFrame(animate)
-  const t = performance.now() * 0.001
+  if (!renderer || !scene || !camera) return
 
-  // 粒子上升动画
-  for (const ps of particleSystems) {
-    const pos = ps.geometry.getAttribute('position') as THREE.BufferAttribute
-    const spd = ps.geometry.getAttribute('speed') as THREE.BufferAttribute
-    const baseY = (ps.userData.baseY as number) || 40
-    const arr = pos.array as Float32Array
-    for (let k = 0; k < pos.count; k++) {
-      arr[k * 3 + 1] += spd.getX(k) * 0.4
-      if (arr[k * 3 + 1] > baseY + 34) {
-        arr[k * 3 + 1] = 1 + Math.random() * 6
-      }
+  // OrbitControls 的阻尼需要持续 update 才能收敛
+  const damping = controls?.enableDamping
+  let moving = false
+  if (controls) {
+    controls.update()
+    // controls.update() 在阻尼未收敛时会持续改变相机位置
+    if (damping) {
+      moving = !controls.target.equals((controls as any)._lastTarget ?? controls.target)
+        || camera.position.distanceToSquared(
+          (controls as any)._lastCamPos ?? camera.position) > 1e-6
+      ;(controls as any)._lastCamPos = camera.position.clone()
+      ;(controls as any)._lastTarget = controls.target.clone()
     }
-    pos.needsUpdate = true
-    ;(ps.material as THREE.PointsMaterial).opacity =
-      0.55 + Math.sin(t * 1.6 + baseY) * 0.25
   }
 
-  controls?.update()
-  if (renderer && scene && camera) {
+  if (needsRender || moving) {
     renderer.render(scene, camera)
+    needsRender = false
   }
 }
 
 // ---------------------------------------------------------------- 交互
 function applyColors() {
-  meshMap.forEach((b, mesh) => {
-    const col = new THREE.Color(colorOf(b))
-    const mat = mesh.material as THREE.MeshStandardMaterial
-    mat.color = col
-    mat.emissive = col
-    mat.emissiveIntensity = 0.04
-  })
+  const list = buildings.value
+  for (const b of list) {
+    const model = modelMap.get(b.buildingId)
+    if (model) applyGradeColor(model, colorOf(b))
+  }
+  markDirty()
 }
 
 async function rebuild() {
@@ -544,10 +709,13 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   cancelAnimationFrame(rafId)
+  cancelAnimationFrame(focusAnim)
+  cancelAnimationFrame(hoverRaf)
   window.removeEventListener('resize', onResize)
   resizeObserver?.disconnect()
   if (renderer) {
     renderer.domElement.removeEventListener('click', onCanvasClick)
+    renderer.domElement.removeEventListener('pointermove', onPointerMove)
     renderer.dispose()
     renderer.domElement.remove()
   }
@@ -561,6 +729,68 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 悬停提示：玻璃拟态小卡片 */
+.hover-tip {
+  position: fixed;
+  z-index: 30;
+  pointer-events: none;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(37, 61, 53, 0.1);
+  box-shadow: 0 8px 24px -10px rgba(37, 61, 53, 0.28);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.hover-tip-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #253d35;
+  margin-bottom: 3px;
+}
+.hover-tip-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 11.5px;
+  color: #5d6e66;
+}
+.hover-tip-grade {
+  color: #35866b;
+}
+
+/* 右下角视角工具条 */
+.view-tools {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tool-btn {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.82);
+  color: #35866b;
+  cursor: pointer;
+  box-shadow: 0 6px 18px -8px rgba(37, 61, 53, 0.35);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: background 0.18s ease, transform 0.12s ease;
+}
+.tool-btn:hover {
+  background: #ffffff;
+}
+.tool-btn:active {
+  transform: translateY(1px);
+}
+
 .dotted {
   border-bottom: 1px dashed rgba(255, 255, 255, 0.35);
   cursor: help;
