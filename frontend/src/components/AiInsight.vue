@@ -167,6 +167,11 @@ async function load(force = false) {
 
 /** 数据版本变化（导入新数据后）自动重新解读 */
 watch(() => app.dataVersion, () => { void load() })
+
+// 【修复】之前只监听 props 上的日期，未传 start-date/end-date 时
+// （看板、3D 园区就是这种情况）用的是 store 里的全局范围，
+// 但全局范围变化不会触发刷新，导致卡片长期显示旧区间的解读。
+watch(() => [app.startDate, app.endDate], () => { void load() })
 /** 筛选条件变化时重新解读 */
 watch(() => [props.siteId, props.buildingId, props.buildingType, props.startDate, props.endDate],
   () => { void load() })

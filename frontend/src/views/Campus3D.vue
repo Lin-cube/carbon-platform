@@ -226,13 +226,10 @@
       </aside>
     </transition>
 
-    <!-- AI 单栋分析弹窗 -->
-    <el-dialog v-model="aiDialogVisible" width="620px" align-center
-               :title="`AI 分析 · ${aiBuildingId}`" class="ai-dialog">
-      <AiInsight v-if="aiDialogVisible" scope="diagnosis" :building-id="aiBuildingId"
-                 :start-date="app.startDate" :end-date="app.endDate"
-                 title="单栋诊断解读" />
-    </el-dialog>
+    <!-- AI 单栋分析：LLM + 该建筑真实聚合数据（/ai/insight?scope=diagnosis） -->
+    <BuildingAiPanel v-model="aiDialogVisible" :building-id="aiBuildingId"
+                     :site-id="selected?.siteId" :start-date="app.startDate"
+                     :end-date="app.endDate" />
 
     <!-- 3D 画布 -->
     <div ref="canvasHost" class="canvas-host"></div>
@@ -294,6 +291,7 @@ import { Close, Loading, Aim, TrendCharts, Warning } from '@element-plus/icons-v
 import { energyApi, analyticsApi } from '@/api'
 import { useAppStore } from '@/stores/app'
 import AiInsight from '@/components/AiInsight.vue'
+import BuildingAiPanel from '@/components/BuildingAiPanel.vue'
 import EChart from '@/components/EChart.vue'
 import { MagicStick, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import { fmtNum, gradeColor } from '@/utils/echarts'
@@ -1005,7 +1003,7 @@ async function loadDetail(b: BuildingRow | null) {
 /** 选中变化时加载详情 */
 watch(selected, (v) => { void loadDetail(v) })
 
-/** 打开「AI 分析此建筑」：复用 AiInsight 的 diagnosis 场景 */
+/** 打开「AI 分析此建筑」：进入小E 助手的多轮对话 */
 function openAiForBuilding() {
   if (!selected.value) return
   aiBuildingId.value = selected.value.buildingId
@@ -1120,6 +1118,11 @@ async function rebuild() {
         if (hit) {
           selected.value = hit
           setFocusTarget(hit.buildingId)
+          // ?ai=1 时自动打开 AI 分析弹窗，便于回归截图
+          if (new URLSearchParams(location.search).get('ai') === '1') {
+            aiBuildingId.value = hit.buildingId
+            aiDialogVisible.value = true
+          }
         }
       }
     }

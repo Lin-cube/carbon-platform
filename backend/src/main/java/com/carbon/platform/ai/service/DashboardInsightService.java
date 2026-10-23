@@ -12,7 +12,11 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -72,9 +76,9 @@ public class DashboardInsightService {
 
     private static final String COMMON_RULES = """
             要求：
-            1. 用中文写 90~130 字，恰好 2 个自然段，不要用 Markdown 标题或列表符号。
-               极简：第一段一句话说范围与总量，第二段一句话说关注点与建议。
-               宁短勿长，超过 130 字视为不合格。
+            1. 篇幅：看板/园区概览用 90~130 字、2 个自然段；
+               单栋诊断用 220~320 字、3 个自然段（证据链需要展开）。
+               不要用 Markdown 标题或列表符号。
             2. **第一段开头必须点明本次统计的范围**，例如
                「统计区间 2016-01-01 至 2016-12-31、全部园区」或
                「统计区间 …、Eagle 园区」，让读者一眼看出这份解读覆盖什么。
@@ -99,9 +103,19 @@ public class DashboardInsightService {
 
     private static final String PROMPT_DIAGNOSIS = """
             你是建筑能源运维诊断专家，为一栋建筑的异常诊断写「证据链解读」。
-            第一段说该建筑是否异常、异常多少小时、集中在什么时段；
+            第一段说该建筑是否异常、异常多少小时、异常分布在哪段时间；
             第二段逐条解释归因证据（对比异常时段与正常时段的数值差异），
             说明证据如何支撑这个结论；第三段给处置建议并指出需要人工复核的点。
+
+            关于日期：**不要在正文里复述统计区间的起止日期**（界面已单独展示，
+            模型复述容易与「异常时间范围」混淆 —— 实测出现过把异常结束日
+            2016-12-01 写成统计区间结束日 2016-12-31 的情况）。
+            只有当你想描述异常分布时，才引用「异常时间范围」的日期。
+
+            关于时段措辞：我给了「异常时间跨度天数」和「异常占区间比例」。
+            只有当跨度占区间比例较小（例如低于 30%）时才可以说「集中」；
+            如果异常几乎铺满整个区间，必须改说「全区间均有分布」，
+            不要写成「集中在 1 月 18 日至 12 月 1 日」这种等于没说的句子。
             """ + COMMON_RULES;
 
     // ================================================================ 入口
@@ -149,18 +163,29 @@ public class DashboardInsightService {
         if (llmClient.available()) {
             long t0 = System.currentTimeMillis();
             try {
-                // 输出上限 200 token ≈ 130 汉字。延迟与输出长度近似线性：
-                // 默认 2000 → 380 → 260 → 200，实测生成耗时 2.2s → 1.9s → 1.3s → 约 1.0s。
-                String raw = llmClient.chat(systemPrompt, userPrompt, 0.3, 200);
+                // 输出上限按场景区分：
+                // - 看板/园区概览：200 token（约 130 字），追求快，一句话结论即可
+                // - 单栋诊断：520 token（约 330 字），需要展开证据链，太短会像模板
+                int maxTokens = "diagnosis".equals(sc) ? 520 : 200;
+                String raw = llmClient.chat(systemPrompt, userPrompt, 0.3, maxTokens);
                 if (raw != null && !raw.isBlank()) {
                     // 数字一致性校验：输出里出现的每个数字都要能在提示词里找到
+                    List<String> badDates = findUnknownDates(raw, userPrompt, startDate, endDate);
+                    if (!badDates.isEmpty()) {
+                        log.warn("AI 解读改写了日期 {}（提示词中不存在），降级规则模板", badDates);
+                        List<String> unknown = List.of();
+                        if (!unknown.isEmpty()) { /* 不会进入 */ }
+                    }
                     List<String> unknown = findUnknownNumbers(raw, userPrompt);
-                    if (unknown.isEmpty()) {
+                    boolean dateOk = badDates.isEmpty();
+                    if (dateOk && unknown.isEmpty()) {
                         text = raw;
                         mode = "llm";
                         log.info("AI 解读成功：scope={} provider={} model={} 输入{}字 耗时={}ms",
                                 sc, llmClient.provider(), llmClient.model(),
                                 userPrompt.length(), System.currentTimeMillis() - t0);
+                    } else if (unknown.isEmpty()) {
+                        log.warn("AI 解读日期校验未通过，降级规则模板");
                     } else {
                         log.warn("AI 解读含未授权数字 {}，降级规则模板", unknown);
                     }
@@ -226,13 +251,20 @@ public class DashboardInsightService {
     private Map<String, Object> collectDiagnosisStats(String startDate, String endDate,
                                                       String buildingId) {
         Map<String, Object> m = baseStats(startDate, endDate, null, buildingId, false);
+        m.put("_diagnosis", Boolean.TRUE);   // 见 buildPrompt：诊断场景不输出统计区间
         if (buildingId == null || buildingId.isBlank()) {
             return m;
         }
         try {
             Map<String, Object> info = jdbcTemplate.queryForMap(
-                    "SELECT building_type_cn AS t, area_m2 AS area, energy_grade AS grade "
+                    "SELECT building_type_cn AS t, area_m2 AS area, energy_grade AS grade, "
+                            + "site_id AS site "
                             + "FROM dim_building WHERE building_id = ?", buildingId);
+            // 【修复】原来这里不设置「园区」，buildPrompt 就会落到 else 分支写成
+            // "园区：全部园区"——而这栋楼明明属于某个具体园区，属于事实错误。
+            if (info.get("site") != null) {
+                m.put("园区", info.get("site"));
+            }
             m.put("建筑类型", info.get("t"));
             if (info.get("area") != null) {
                 m.put("建筑面积", String.format("%.0f 平方米", toDouble(info.get("area"))));
@@ -270,8 +302,23 @@ public class DashboardInsightService {
             putIfPositive(m, "异常时段平均湿度", cmp.get("a_hum"));
             putIfPositive(m, "正常时段平均湿度", cmp.get("n_hum"));
             if (cmp.get("first_ts") != null && cmp.get("last_ts") != null) {
-                m.put("异常时间范围", str(cmp.get("first_ts")).substring(0, 10)
-                        + " 至 " + str(cmp.get("last_ts")).substring(0, 10));
+                String first = str(cmp.get("first_ts")).substring(0, 10);
+                String last = str(cmp.get("last_ts")).substring(0, 10);
+                m.put("异常时间范围", first + " 至 " + last);
+                // 跨度天数：让模型能判断"是否真的集中"。
+                // 原来只说"集中在 X 至 Y"，当异常遍布整年时会写成
+                // "集中在 2016-01-18 至 2016-12-01"，等于没说还误导。
+                try {
+                    long days = java.time.temporal.ChronoUnit.DAYS.between(
+                            LocalDate.parse(first), LocalDate.parse(last)) + 1;
+                    m.put("异常时间跨度天数", days);
+                    long totalDays = java.time.temporal.ChronoUnit.DAYS.between(
+                            LocalDate.parse(startDate), LocalDate.parse(endDate)) + 1;
+                    m.put("异常占区间比例",
+                            String.format("%.0f%%", days * 100.0 / Math.max(totalDays, 1)));
+                } catch (Exception ignored) {
+                    // 日期解析失败不影响主流程
+                }
             }
         } catch (Exception e) {
             log.debug("诊断对比取数失败：{}", e.toString());
@@ -438,7 +485,13 @@ public class DashboardInsightService {
         if (m.get("建筑类型") != null) {
             sb.append("建筑类型筛选：").append(m.get("建筑类型")).append("\n");
         }
-        sb.append("统计区间：").append(m.get("区间")).append("\n");
+        // 诊断场景不把「统计区间」放进提示词：
+        // 模型会把它与「异常时间范围」混淆（实测把异常结束日当成区间结束日）。
+        // 区间信息由前端卡片单独展示，正文不需要复述。
+        boolean diagnosisScope = m.get("_diagnosis") != null;
+        if (!diagnosisScope) {
+            sb.append("统计区间：").append(m.get("区间")).append("\n");
+        }
         sb.append("建筑数量：").append(m.get("bld")).append(" 栋\n");
         if (m.get("建筑类型") != null) {
             sb.append("建筑类型：").append(m.get("建筑类型")).append("\n");
@@ -551,6 +604,34 @@ public class DashboardInsightService {
     // ================================================================ 校验与工具
 
     /**
+     * 找出正文里「提示词没给过」的日期。
+     *
+     * <p>【为什么需要单独的日期校验】数字校验只拦 ≥1000 的数，两位数一律放过；
+     * 而日期恰好由两位数字组成。实测模型会把 {@code 2016-12-31} 写成
+     * {@code 2016-12-01}，数字校验完全看不见，读者却会以为统计区间变了。
+     *
+     * <p>判定很保守：正文里出现的每个 yyyy-MM-dd 必须在提示词原文里出现过。
+     */
+    private List<String> findUnknownDates(String text, String prompt, String... allowed) {
+        List<String> bad = new ArrayList<>();
+        if (text == null) return bad;
+        Set<String> ok = new HashSet<>(List.of(allowed));
+        Matcher m = Pattern.compile("\\d{4}-\\d{2}-\\d{2}").matcher(text);
+        Set<String> seen = new HashSet<>();
+        while (m.find()) {
+            String d = m.group();
+            if (!seen.add(d)) continue;
+            // 提示词里出现过，或本身就是本次查询区间的起止日，都算合法。
+            // 诊断场景为了不让模型混淆，特意没把统计区间写进提示词，
+            // 但模型提到"2016-01-01 和 2016-12-31"是完全正确的，不能当成编造。
+            if (ok.contains(d)) continue;
+            if (prompt != null && prompt.contains(d)) continue;
+            bad.add(d);
+        }
+        return bad;
+    }
+
+    /**
      * 找出模型输出里「提示词中不存在」的数字。
      *
      * <p>≥1000 的大数必须精确匹配：1% 容差对 9 位数意味着数百万的偏差，
@@ -583,6 +664,15 @@ public class DashboardInsightService {
             try {
                 v = Double.parseDouble(tok);
             } catch (Exception e) {
+                continue;
+            }
+            // 【分级容忍】
+            // - 个位数（含 1.8 这类比例）：放行。模型由 91.1÷50.9 推导出「1.8 倍」
+            //   属于正当推理，不是编造；卡住它只会频繁降级成规则模板，反而更差。
+            // - 10 ~ 999：要求与提示词中的某个数 1% 内匹配。
+            // - ≥1000：必须精确匹配（这类数字写错才是致命问题）。
+            // - ≤31 的整数：日期/时段等，直接放行。
+            if (v < 10) {
                 continue;
             }
             if (v <= 31 && v == Math.floor(v)) {

@@ -41,6 +41,11 @@ public class AiController {
     @PostMapping("/insight")
     @OperLog(title = "AI-看板解读", businessType = OperLog.BusinessType.QUERY)
     public R<Map<String, Object>> insight(@RequestBody Map<String, String> body) {
+        // refresh=1：用户点了「重新生成」，清掉缓存再生成。
+        // 用可选参数而不是新增接口，保持向后兼容（不传时行为与原来完全一致）。
+        if ("1".equals(body.get("refresh"))) {
+            dashboardInsightService.invalidate();
+        }
         return R.ok(dashboardInsightService.insight(
                 body.getOrDefault("scope", "dashboard"),
                 body.getOrDefault("startDate", "2016-01-01"),
