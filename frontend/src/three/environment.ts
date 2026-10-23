@@ -24,6 +24,8 @@ export function createEnvironment(opts: {
   radius: number
   /** 树木数量，默认按半径推算 */
   treeCount?: number
+  /** 树木密度系数（画质降级时 <1，减少实例数量） */
+  density?: number
 }): CampusEnvironment {
   const group = new THREE.Group()
   group.name = 'campus-environment'
@@ -109,7 +111,9 @@ export function createEnvironment(opts: {
   group.add(roadGroup)
 
   // ── 4. 树木：InstancedMesh（树冠 + 树干各一次 draw call）──────────
-  const count = opts.treeCount ?? Math.min(360, Math.round(R / 2.2))
+  const density = opts.density ?? 1
+  const count = opts.treeCount
+    ?? Math.max(24, Math.round(Math.min(360, R / 2.2) * density))
   const crownGeo = track(new THREE.ConeGeometry(2.3, 7.4, 6))
   const crownMat = track(new THREE.MeshStandardMaterial({
     color: PALETTE.treeLeaf, roughness: 0.95, metalness: 0,

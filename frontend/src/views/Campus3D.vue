@@ -1,8 +1,19 @@
 <template>
   <div class="campus-wrap">
     <!-- 左侧控制面板 -->
-    <div class="overlay-panel left-panel">
-      <div class="panel-title">3D 园区监控</div>
+    <div class="overlay-panel left-panel" :class="{ collapsed: panelCollapsed }">
+      <div class="panel-title">
+        <span>3D 园区监控</span>
+        <button v-if="quality" class="q-badge" type="button"
+                :title="`渲染画质：${qualityLabel(quality)}（${quality.reason}）`">
+          {{ qualityLabel(quality) }}
+        </button>
+        <button class="collapse-btn" type="button"
+                :title="panelCollapsed ? '展开面板' : '收起面板'"
+                @click="panelCollapsed = !panelCollapsed">
+          <el-icon><component :is="panelCollapsed ? 'ArrowDown' : 'ArrowUp'" /></el-icon>
+        </button>
+      </div>
 
       <div class="field">
         <label>园区</label>
@@ -290,6 +301,7 @@ import {
   PALETTE, GRADE_COLOR, EUI_COLOR, ANOMALY_COLOR, NEUTRAL,
 } from '@/three/palette'
 import { createEnvironment, type CampusEnvironment } from '@/three/environment'
+import { detectQuality, qualityLabel, type QualityProfile } from '@/three/quality'
 import {
   createBuildingModel, applyGradeColor, setBuildingEmphasis,
   footprintOf, type BuildingModel,
@@ -304,6 +316,8 @@ const sites = ref<SiteRow[]>([])
 const siteId = ref('')
 /** AI 解读悬浮面板是否展开 */
 const aiOpen = ref(true)
+/** 左侧控制面板是否折叠（窄屏默认折叠，给沙盘让空间） */
+const panelCollapsed = ref(false)
 
 /** 点击 AI 解读里的异常建筑 → 跳到异常诊断页并自动诊断该建筑 */
 function onFocusBuilding(buildingId: string) {
@@ -430,6 +444,11 @@ const modelMap = new Map<string, BuildingModel>()
 let env: CampusEnvironment | null = null
 /** 承载建筑与环境的根节点，重建时整体替换 */
 let campusGroup: THREE.Group | null = null
+/** 设备画质档位（自动探测，影响渲染开销但不影响业务数据） */
+const quality = ref<QualityProfile | null>(null)
+let qualityProfile: QualityProfile | null = null
+/** WebGL 上下文是否丢失 */
+const contextLost = ref(false)
 /** 默认视角参数，供「恢复默认视角」使用 */
 let defaultCam = { pos: new THREE.Vector3(120, 110, 150), target: new THREE.Vector3(0, 0, 0) }
 
@@ -458,13 +477,18 @@ function initThree() {
     st.textContent = '*,*::before,*::after{transition:none!important;animation:none!important}'
     document.head.appendChild(st)
   }
+  // ── 画质档位：按设备能力自动降级（软件渲染 / 移动端 / 低配）──
+  qualityProfile = detectQuality()
+  quality.value = qualityProfile
+  const q = qualityProfile
+
   renderer = new THREE.WebGLRenderer({
-    antialias: true, alpha: false, preserveDrawingBuffer: captureMode,
+    antialias: q.antialias, alpha: false, preserveDrawingBuffer: captureMode,
   })
   renderer.setSize(w, h)
-  // 设备像素比上限 2：高分屏不至于把填充率拉满
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-  renderer.shadowMap.enabled = true
+  // 像素比上限由画质档位决定（高配 2 / 移动 1.5 / 软件渲染 1）
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, q.pixelRatio))
+  renderer.shadowMap.enabled = q.shadows
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
   renderer.outputColorSpace = THREE.SRGBColorSpace
   renderer.toneMapping = THREE.ACESFilmicToneMapping
@@ -492,7 +516,8 @@ function initThree() {
   sun.position.set(180, 300, 150)
   sun.castShadow = true
   // 阴影贴图 1024 足够，2048 在笔记本上开销翻倍且观感提升有限
-  sun.shadow.mapSize.set(1024, 1024)
+  sun.castShadow = q.shadows
+  sun.shadow.mapSize.set(q.shadowMapSize, q.shadowMapSize)
   sun.shadow.camera.near = 1
   sun.shadow.camera.far = 1200
   const sd = 360
@@ -513,6 +538,10 @@ function initThree() {
   campusGroup = new THREE.Group()
   campusGroup.name = 'campus-root'
   scene.add(campusGroup)
+
+  // WebGL 上下文丢失（显卡驱动重置、切换显卡、休眠唤醒）：给出提示而不是白屏
+  renderer.domElement.addEventListener('webglcontextlost', onContextLost)
+  renderer.domElement.addEventListener('webglcontextrestored', onContextRestored)
 
   renderer.domElement.addEventListener('click', onCanvasClick)
   renderer.domElement.addEventListener('pointermove', onPointerMove)
@@ -539,6 +568,25 @@ function initThree() {
       }
     }, 2500)
   }
+}
+
+/**
+ * WebGL 上下文丢失处理。
+ *
+ * <p>触发场景：显卡驱动重置、笔记本切换独显/核显、系统休眠唤醒、
+ * 浏览器回收过多上下文。默认行为是画布永久黑屏，必须显式处理。
+ */
+function onContextLost(ev: Event) {
+  ev.preventDefault()      // 阻止默认行为，浏览器才可能触发 restored
+  contextLost.value = true
+  ElMessage.warning('3D 渲染上下文丢失，正在尝试恢复…')
+}
+
+function onContextRestored() {
+  contextLost.value = false
+  // three 会在上下文恢复后重建 GPU 资源，这里只需重绘一帧
+  markDirty()
+  ElMessage.success('3D 场景已恢复')
 }
 
 function onResize() {
@@ -722,7 +770,7 @@ function buildBuildings() {
   const radius = Math.max(worldW, worldD) / 2 + 62
 
   // ── 环境（地面/道路/草坪/树木）──
-  env = createEnvironment({ radius })
+  env = createEnvironment({ radius, treeCount: undefined, density: qualityProfile?.treeScale ?? 1 })
   campusGroup.add(env.group)
 
   // ── 建筑 ──
@@ -1086,6 +1134,8 @@ function gotoAnomaly() {
 
 onMounted(async () => {
   await nextTick()
+  // 窄屏默认收起控制面板，优先保证 3D 沙盘面积
+  panelCollapsed.value = window.innerWidth < 1180
 
   // 【为什么单独 try】initThree() 依赖 WebGL。若浏览器禁用了硬件加速、
   // 显卡驱动异常，或运行在无头环境里，它会抛异常。
@@ -1134,6 +1184,42 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 面板折叠 */
+.left-panel.collapsed > *:not(.panel-title) {
+  display: none;
+}
+.left-panel.collapsed {
+  padding-bottom: 12px;
+}
+
+/* 画质徽标 */
+.q-badge {
+  padding: 1px 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(53, 134, 107, 0.2);
+  background: rgba(53, 134, 107, 0.08);
+  color: #2f7a61;
+  font-size: 10px;
+  font-family: inherit;
+  cursor: help;
+}
+
+/* 折叠按钮 */
+.collapse-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: rgba(37, 61, 53, 0.05);
+  color: #5d6e66;
+  cursor: pointer;
+  transition: background 0.16s ease;
+}
+.collapse-btn:hover { background: rgba(37, 61, 53, 0.1); }
+
 /* 当前着色模式提示 */
 .mode-hint {
   margin-top: 9px;
@@ -1483,6 +1569,15 @@ onBeforeUnmount(() => {
 .ai-float.shifted { right: 424px; }
 .view-tools.shifted { right: 424px; }
 
+@media (max-width: 1400px) {
+  .ai-float.shifted { right: 16px; bottom: -100vh; }   /* 抽屉打开时小屏隐藏 AI 卡 */
+}
+@media (max-width: 900px) {
+  .ai-float { width: calc(100vw - 24px); left: 12px; right: 12px; }
+  .ai-float.shifted { display: none; }
+  .view-tools.shifted { right: 18px; }
+}
+
 /* 右下角视角工具条 */
 .view-tools {
   position: absolute;
@@ -1526,7 +1621,7 @@ onBeforeUnmount(() => {
   position: absolute;
   right: 16px;
   bottom: 16px;
-  width: 460px;
+  width: min(460px, calc(100vw - 32px));
   transition: right 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
   max-height: 46vh;
   display: flex;
@@ -1626,6 +1721,7 @@ onBeforeUnmount(() => {
   font-size: 13px;
   font-weight: 600;
   color: #253d35;
+  gap: 8px;
   margin-bottom: 11px;
   display: flex;
   justify-content: space-between;
