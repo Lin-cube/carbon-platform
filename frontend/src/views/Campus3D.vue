@@ -19,6 +19,15 @@
           <el-radio-button value="eui">能耗强度</el-radio-button>
           <el-radio-button value="anomaly">异常率</el-radio-button>
         </el-radio-group>
+
+        <!-- 当前模式提示：说明这个颜色到底代表什么 -->
+        <div class="mode-hint">
+          <div class="mode-hint-head">
+            当前：<b>{{ modeHint.title }}</b>
+            <span class="mode-hint-unit">{{ modeHint.unit }}</span>
+          </div>
+          <p class="mode-hint-desc">{{ modeHint.desc }}</p>
+        </div>
       </div>
 
       <div class="field">
@@ -34,7 +43,9 @@
       <div class="legend">
         <div class="legend-title">图例</div>
         <div v-for="l in legendItems" :key="l.label" class="legend-item">
-          <span class="swatch" :style="{ background: l.color }"></span>{{ l.label }}
+          <span class="swatch" :style="{ background: l.color }"></span>
+          <span class="legend-label">{{ l.label }}</span>
+          <span class="legend-count">{{ l.count }}</span>
         </div>
       </div>
 
@@ -44,6 +55,13 @@
         <div>· 左键拖拽旋转，滚轮缩放</div>
         <div>· 悬停高亮，点击聚焦查看详情</div>
         <div>· 高度为示意比例，非真实楼高</div>
+      </div>
+
+      <!-- 口径说明：避免把年化指标误读成"当前时间范围的数据" -->
+      <div class="scope-note">
+        <b>数据口径</b>
+        建筑着色基于<b>年化指标</b>（面积 / 强度 / 评级 / 异常率，来自建筑档案）；
+        顶部时间范围只作用于详情抽屉、趋势图与 AI 解读，不改变建筑着色。
       </div>
     </div>
 
@@ -303,32 +321,98 @@ const siteStat = reactive({
   electricity: 0, carbon: 0, anomalyCount: 0, avgGrade: '--'
 })
 
+/** 各档位在当前园区内的建筑数量（真实数据，用于图例提示） */
+function countByBand(kind: 'grade' | 'eui' | 'anomaly'): number[] {
+  const list = buildings.value
+  if (kind === 'grade') {
+    const order = ['A', 'B', 'C', 'D', 'E', '未评级']
+    const m = new Map<string, number>(order.map((k) => [k, 0]))
+    for (const b of list) {
+      const g = b.energyGrade && b.energyGrade !== '未评级' ? b.energyGrade : '未评级'
+      m.set(g, (m.get(g) ?? 0) + 1)
+    }
+    return order.map((k) => m.get(k) ?? 0)
+  }
+  if (kind === 'eui') {
+    // 末尾多留一格给「无数据」，否则图例数量之和会小于建筑总数，看着像丢数据
+    const counts = new Array(EUI_COLOR.length + 1).fill(0)
+    for (const b of list) {
+      const e = b.euiKwhM2Year
+      if (e == null) {
+        counts[EUI_COLOR.length] += 1
+        continue
+      }
+      const i = EUI_COLOR.findIndex((seg) => e < seg.max)
+      counts[i < 0 ? EUI_COLOR.length - 1 : i] += 1
+    }
+    return counts
+  }
+  const counts = new Array(ANOMALY_COLOR.length).fill(0)
+  for (const b of list) {
+    const r = b.anomalyRate ?? 0
+    const i = ANOMALY_COLOR.findIndex((seg) => r < seg.max)
+    counts[i < 0 ? ANOMALY_COLOR.length - 1 : i] += 1
+  }
+  return counts
+}
+
 const legendItems = computed(() => {
   if (colorBy.value === 'grade') {
+    const c = countByBand('grade')
     return [
-      { label: 'A 优秀', color: GRADE_COLOR.A },
-      { label: 'B 良好', color: GRADE_COLOR.B },
-      { label: 'C 一般', color: GRADE_COLOR.C },
-      { label: 'D 较差', color: GRADE_COLOR.D },
-      { label: 'E 差', color: GRADE_COLOR.E },
-      { label: '未评级', color: NEUTRAL },
+      { label: 'A 优秀', color: GRADE_COLOR.A, count: c[0] },
+      { label: 'B 良好', color: GRADE_COLOR.B, count: c[1] },
+      { label: 'C 一般', color: GRADE_COLOR.C, count: c[2] },
+      { label: 'D 较差', color: GRADE_COLOR.D, count: c[3] },
+      { label: 'E 差', color: GRADE_COLOR.E, count: c[4] },
+      { label: '未评级', color: NEUTRAL, count: c[5] },
     ]
   }
   if (colorBy.value === 'anomaly') {
+    const c = countByBand('anomaly')
     return [
-      { label: '正常（<2%）', color: ANOMALY_COLOR[0].color },
-      { label: '轻度（2-5%）', color: ANOMALY_COLOR[1].color },
-      { label: '偏高（5-10%）', color: ANOMALY_COLOR[2].color },
-      { label: '严重（>10%）', color: ANOMALY_COLOR[3].color },
+      { label: '正常（<2%）', color: ANOMALY_COLOR[0].color, count: c[0] },
+      { label: '轻度（2-5%）', color: ANOMALY_COLOR[1].color, count: c[1] },
+      { label: '偏高（5-10%）', color: ANOMALY_COLOR[2].color, count: c[2] },
+      { label: '严重（>10%）', color: ANOMALY_COLOR[3].color, count: c[3] },
     ]
   }
-  return [
-    { label: '低强度（<60）', color: EUI_COLOR[0].color },
-    { label: '中低（60-100）', color: EUI_COLOR[1].color },
-    { label: '中等（100-150）', color: EUI_COLOR[2].color },
-    { label: '较高（150-200）', color: EUI_COLOR[3].color },
-    { label: '高强度（>200）', color: EUI_COLOR[4].color },
+  const c = countByBand('eui')
+  const items = [
+    { label: '低强度（<60）', color: EUI_COLOR[0].color, count: c[0] },
+    { label: '中低（60-100）', color: EUI_COLOR[1].color, count: c[1] },
+    { label: '中等（100-150）', color: EUI_COLOR[2].color, count: c[2] },
+    { label: '较高（150-200）', color: EUI_COLOR[3].color, count: c[3] },
+    { label: '高强度（>200）', color: EUI_COLOR[4].color, count: c[4] },
   ]
+  if (c[5] > 0) items.push({ label: '无数据', color: NEUTRAL, count: c[5] })
+  return items
+})
+
+/**
+ * 当前着色模式的口径说明。
+ * 写清楚"这个颜色代表什么、依据什么算的"，避免观者误读。
+ */
+const modeHint = computed(() => {
+  if (colorBy.value === 'eui') {
+    return {
+      title: '能耗强度',
+      unit: 'kWh/m²·年',
+      desc: '面积归一化后的能耗水平，阈值 60 / 100 / 150 / 200。单位面积用能越高颜色越暖。',
+    }
+  }
+  if (colorBy.value === 'anomaly') {
+    return {
+      title: '异常率',
+      unit: '异常小时 ÷ 有效小时',
+      desc: '异常小时占有效数据小时的比例，阈值 2% / 5% / 10%。占比越高颜色越暖。',
+    }
+  }
+  return {
+    title: '能耗评级',
+    unit: 'A ~ E',
+    desc: '按同建筑类型的 EUI 分位划分（0.2 / 0.4 / 0.6 / 0.8 分位），A 最优。未评级为中性灰。',
+  }
 })
 
 // ---------------------------------------------------------------- Three.js
@@ -579,6 +663,7 @@ function focusCameraOn(target: THREE.Vector3) {
 
 function clearScene() {
   if (!scene) return
+  colorTween = null
   for (const model of modelMap.values()) {
     model.group.removeFromParent()
     model.dispose()
@@ -744,6 +829,10 @@ function animate() {
     }
   }
 
+  // 颜色过渡期间必须持续重绘
+  const tweening = stepColorTween(performance.now())
+  if (tweening) needsRender = true
+
   if (needsRender || moving) {
     renderer.render(scene, camera)
     needsRender = false
@@ -885,17 +974,76 @@ function gotoDiagnosis() {
   router.push({ path: '/anomaly', query: { buildingId: selected.value.buildingId } })
 }
 
+/**
+ * 颜色过渡状态。
+ *
+ * <p>切换着色模式时，如果直接改材质颜色会"闪一下"，观感廉价且容易让人
+ * 以为数据跳变。这里把每栋建筑的强调色从当前值 lerp 到目标值，
+ * 持续 380ms；过渡期间持续请求重绘，结束后停止。
+ *
+ * <p>【避免数据状态混乱】过渡只影响"颜色表现"，`colorBy` 的值在点击瞬间
+ * 就已切换，图例与模式提示立即更新——也就是说文案永远领先于动画，
+ * 不会出现"图例说明是 A 模式、建筑却还显示 B 模式颜色"的错乱。
+ */
+interface ColorTween {
+  from: Map<string, THREE.Color>
+  to: Map<string, THREE.Color>
+  t0: number
+}
+let colorTween: ColorTween | null = null
+const COLOR_TWEEN_MS = 380
+
+/** 切换着色模式：启动颜色过渡 */
 function applyColors() {
-  const list = buildings.value
-  for (const b of list) {
+  if (!scene) return
+  const from = new Map<string, THREE.Color>()
+  const to = new Map<string, THREE.Color>()
+  for (const b of buildings.value) {
     const model = modelMap.get(b.buildingId)
-    if (model) applyGradeColor(model, colorOf(b))
+    if (!model) continue
+    const cur = (model.accent.material as THREE.MeshStandardMaterial).color
+    from.set(b.buildingId, cur.clone())
+    to.set(b.buildingId, new THREE.Color(colorOf(b)))
   }
+  colorTween = { from, to, t0: performance.now() }
   markDirty()
+}
+
+/**
+ * 在渲染循环里推进颜色过渡。
+ * @returns 是否仍在过渡中（是则需要继续重绘）
+ */
+function stepColorTween(now: number): boolean {
+  if (!colorTween) return false
+  const p = Math.min(1, (now - colorTween.t0) / COLOR_TWEEN_MS)
+  // easeInOutCubic：起步与收尾都柔和
+  const e = p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2
+
+  for (const [id, fromC] of colorTween.from) {
+    const model = modelMap.get(id)
+    const toC = colorTween.to.get(id)
+    if (!model || !toC) continue
+    const c = fromC.clone().lerp(toC, e)
+    const am = model.accent.material as THREE.MeshStandardMaterial
+    am.color.copy(c)
+    am.emissive.copy(c)
+    ;(model.halo.material as THREE.MeshBasicMaterial).color.copy(c)
+  }
+
+  if (p >= 1) {
+    colorTween = null
+    return false
+  }
+  return true
 }
 
 async function rebuild() {
   if (!siteId.value) return
+  // 截图模式：?mode=eui|anomaly 直接以该着色模式构建，便于回归对比
+  if (typeof location !== 'undefined' && location.search.includes('capture')) {
+    const m = new URLSearchParams(location.search).get('mode')
+    if (m === 'eui' || m === 'anomaly' || m === 'grade') colorBy.value = m
+  }
   loading.value = true
   try {
     const list = await energyApi.buildings({ siteId: siteId.value, limit: 300 })
@@ -986,6 +1134,58 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 当前着色模式提示 */
+.mode-hint {
+  margin-top: 9px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: rgba(53, 134, 107, 0.06);
+  border: 1px solid rgba(53, 134, 107, 0.12);
+}
+.mode-hint-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11.5px;
+  color: #5d6e66;
+}
+.mode-hint-head b {
+  font-size: 12px;
+  color: #2f7a61;
+  font-weight: 600;
+}
+.mode-hint-unit {
+  font-size: 10.5px;
+  color: #8b9d95;
+}
+.mode-hint-desc {
+  margin: 5px 0 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: #6f8085;
+}
+
+/* 数据口径说明 */
+.scope-note {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(37, 61, 53, 0.04);
+  border: 1px dashed rgba(37, 61, 53, 0.14);
+  font-size: 10.5px;
+  line-height: 1.75;
+  color: #6f8085;
+}
+.scope-note b { color: #46584f; }
+
+/* 图例：标签 + 数量 */
+.legend-label { flex: 1; }
+.legend-count {
+  font-size: 11px;
+  color: #8b9d95;
+  font-variant-numeric: tabular-nums;
+}
+
 /* 浅色面板里的表单控件轻微收敛 */
 .left-panel :deep(.el-select__wrapper) {
   background: rgba(255, 255, 255, 0.7);
