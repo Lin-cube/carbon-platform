@@ -99,7 +99,9 @@
             ROUND(AVG(d.cop_avg), 3)           AS copAvg,
             SUM(d.anomaly_hours)               AS anomalyHours,
             ROUND(SUM(d.anomaly_hours) / NULLIF(COUNT(*) * 24, 0), 4) AS anomalyRate,
-            CONCAT(MIN(d.stat_date), ' ~ ', MAX(d.stat_date)) AS timeRange
+            CONCAT(MIN(d.stat_date), ' ~ ', MAX(d.stat_date)) AS timeRange,
+            COUNT(DISTINCT CASE WHEN d.hvac_kwh > 0 THEN d.building_id END)       AS hvacBuildingCount,
+            COUNT(DISTINCT CASE WHEN d.cop_avg IS NOT NULL THEN d.building_id END) AS copBuildingCount
         FROM agg_building_daily d
         <where>
             <if test="startDate != null">AND d.stat_date &gt;= #{startDate}</if>

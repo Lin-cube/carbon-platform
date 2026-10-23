@@ -35,4 +35,16 @@ public class OverviewVO {
 
     @Schema(description = "统计时间范围")
     private String timeRange;
+
+    /**
+     * 有冷暖分项表计的楼栋数（hvac_kwh > 0）。
+     *
+     * <p>【为什么需要】空调能耗并非所有建筑都有：BDG2 里大量建筑只有电表。
+     * 实测 456 栋中只有 71 栋有冷暖表计。前端必须能显示"覆盖 71/456 栋"，
+     * 否则用户会把 71 栋的合计当成全园区口径。
+     */
+    private Long hvacBuildingCount;
+
+    /** 有 COP 的楼栋数（COp 依赖冷量表，覆盖更少） */
+    private Long copBuildingCount;
 }

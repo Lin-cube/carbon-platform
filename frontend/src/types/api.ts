@@ -68,6 +68,10 @@ export interface OverviewVO {
   anomalyHours: number
   anomalyRate: number
   timeRange: string
+  /** 有冷暖分项表计的楼栋数（空调能耗只覆盖这些楼） */
+  hvacBuildingCount?: number
+  /** 有 COP 的楼栋数（依赖冷量表，覆盖更少） */
+  copBuildingCount?: number
 }
 
 export interface BreakdownItem {

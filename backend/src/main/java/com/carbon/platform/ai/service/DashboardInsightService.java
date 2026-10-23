@@ -503,7 +503,13 @@ public class DashboardInsightService {
             sb.append("能耗评级：").append(m.get("能耗评级")).append("\n");
         }
         sb.append("总用电量：").append(shortNum(toDouble(m.get("elec")), "kWh")).append("\n");
-        sb.append("空调能耗：").append(shortNum(toDouble(m.get("hvac")), "kWh")).append("\n");
+        // 空调能耗为 0 时不要写进提示词：
+        // 0 表示"原始数据没有冷暖分项表计"，不是"这栋楼不用空调"。
+        // 写进提示词会让模型得出「该建筑无空调能耗」的错误结论。
+        double hvacVal = toDouble(m.get("hvac"));
+        if (hvacVal > 0) {
+            sb.append("空调能耗：").append(shortNum(hvacVal, "kWh")).append("\n");
+        }
         sb.append("碳排放：").append(shortNum(toDouble(m.get("carbon")), "kg")).append("\n");
 
         if (m.get("峰值时刻") != null) {

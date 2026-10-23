@@ -33,9 +33,18 @@
         <div class="kpi-sub">区间 {{ overview?.timeRange || '--' }}</div>
       </div>
       <div class="kpi-card green">
-        <div class="kpi-label">空调系统能耗</div>
+        <div class="kpi-label">
+          空调系统能耗
+          <el-tooltip placement="bottom" raw-content
+                      content="该数值为<b>冷量/热量</b>（热力学能），与电量不是同一口径，<br/>不能直接相除求占比。<br/><br/>BDG2 原始数据中只有部分建筑提供冷/热/蒸汽分项表计，<br/>其余建筑只有电表，因此该合计仅覆盖少数楼栋。">
+            <el-icon class="kpi-help"><QuestionFilled /></el-icon>
+          </el-tooltip>
+        </div>
         <div class="kpi-value">{{ fmtNum(overview?.hvacKwh) }}<span class="kpi-unit">kWh</span></div>
-        <div class="kpi-sub">占用电 {{ hvacRatio }}%</div>
+        <div class="kpi-sub">
+          覆盖 {{ overview?.hvacBuildingCount ?? '--' }} / {{ overview?.buildingCount ?? '--' }} 栋
+          <span class="kpi-sub-note">· 冷热量口径</span>
+        </div>
       </div>
       <div class="kpi-card orange">
         <div class="kpi-label">碳排放量</div>
@@ -392,6 +401,17 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.kpi-help {
+  margin-left: 4px;
+  font-size: 12px;
+  color: #a9b4b8;
+  cursor: help;
+  vertical-align: middle;
+}
+.kpi-sub-note {
+  color: #a9b4b8;
+}
+
 
 
 

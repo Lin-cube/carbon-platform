@@ -145,9 +145,14 @@
               </span>
             </div>
             <div class="dd-metric">
-              <span class="dd-metric-k">空调能耗</span>
-              <span class="dd-metric-v" :class="{ muted: hvacText === '未单独计量' }">
-                {{ hvacText }}<i v-if="hvacText !== '未单独计量'">kWh</i>
+              <span class="dd-metric-k">
+                空调能耗
+                <el-tooltip placement="top" raw-content :content="hvacTip">
+                  <el-icon class="dd-help"><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </span>
+              <span class="dd-metric-v" :class="{ muted: hvacMissing }">
+                {{ hvacText }}<i v-if="!hvacMissing">kWh</i>
               </span>
             </div>
             <div class="dd-metric">
@@ -287,7 +292,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { Close, Loading, Aim, TrendCharts, Warning } from '@element-plus/icons-vue'
+import { Close, Loading, Aim, TrendCharts, Warning, QuestionFilled } from '@element-plus/icons-vue'
 import { energyApi, analyticsApi } from '@/api'
 import { useAppStore } from '@/stores/app'
 import AiInsight from '@/components/AiInsight.vue'
@@ -915,15 +920,27 @@ const aiBuildingId = ref('')
 const rangeText = computed(() => `${app.startDate} ~ ${app.endDate}`)
 
 /**
- * 空调能耗的展示口径：
- * hvacKwh 为 0 或 null 时，说明该建筑没有可用的空调分项计量
- * （BDG2 中此类建筑占多数），显示「未单独计量」而不是 0。
+ * 空调能耗的展示口径。
+ *
+ * <p>hvacKwh 为 0 或 null 有两种可能：原始 BDG2 数据里这栋楼就没有
+ * 冷/热/蒸汽分项表计（456 栋中占 385 栋），或表计未通过质量校验。
+ * 无论哪种，界面都必须说明"数据源没有"，而不是让用户以为系统漏了。
  */
 const hvacText = computed(() => {
   const v = detailMetrics.value?.hvacKwh
-  if (v == null || v === 0) return '未单独计量'
+  if (v == null || v === 0) return '无分项计量'
   return `${fmtNum(v)} kWh`
 })
+
+const hvacMissing = computed(() => hvacText.value === '无分项计量')
+
+/** 空调能耗缺失时的说明文案（放在 tooltip 里） */
+const hvacTip = computed(() =>
+  hvacMissing.value
+    ? '该建筑在原始数据（BDG2）中没有冷/热/蒸汽分项表计，<br/>'
+      + '因此无法给出空调能耗，只能按整栋电表计量。<br/><br/>'
+      + '全部 456 栋中有 71 栋提供分项表计。'
+    : '该数值为冷量/热量（热力学能），与电量不是同一口径。')
 
 async function loadDetail(b: BuildingRow | null) {
   if (!b) {
@@ -1187,6 +1204,15 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 指标名旁的帮助图标 */
+.dd-help {
+  margin-left: 3px;
+  font-size: 11px;
+  color: #b6c3bd;
+  cursor: help;
+  vertical-align: middle;
+}
+
 /* 面板折叠 */
 .left-panel.collapsed > *:not(.panel-title) {
   display: none;
