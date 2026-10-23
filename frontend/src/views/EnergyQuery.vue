@@ -149,6 +149,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import EChart from '@/components/EChart.vue'
@@ -164,6 +165,7 @@ const loading = ref(false)
 const sites = ref<SiteRow[]>([])
 const typeOptions = ref<DimensionOption[]>([])
 const buildings = ref<BuildingRow[]>([])
+const route = useRoute()
 const buildingIds = ref<string[]>([])
 const granularity = ref<'hourly' | 'daily' | 'monthly'>('daily')
 const metric = ref<'electricity' | 'hvac' | 'water' | 'carbon'>('electricity')
@@ -402,6 +404,14 @@ onMounted(async () => {
     /* 忽略 */
   }
   await loadBuildings()
+
+  // 支持从其他页面带建筑进来：/energy?buildingId=xxx
+  // （3D 园区的「查看能耗详情」入口使用）
+  const preset = route.query.buildingId
+  if (typeof preset === 'string' && preset) {
+    buildingIds.value = [preset]
+  }
+
   await loadAll()
 })
 </script>

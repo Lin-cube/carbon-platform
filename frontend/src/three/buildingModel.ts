@@ -353,11 +353,10 @@ export function setBuildingEmphasis(
   }
   const dim = !!opts.dim
   bodyMat.transparent = dim
-  bodyMat.opacity = dim ? 0.38 : 1
-  if (model.windows) {
-    const gm = model.windows.material as THREE.MeshStandardMaterial
-    // 共享材质，不能按栋改透明度；这里通过 visible 控制
-    model.windows.visible = !dim
-  }
+  // 0.45：既能压低权重，又不至于让园区看起来"消失"
+  bodyMat.opacity = dim ? 0.45 : 1
+  // 窗户材质是全局共享的，无法按栋调透明度；
+  // 保持可见即可（窗户很小，不会抢视觉焦点）
+  if (model.windows) model.windows.visible = true
   ;(model.halo.material as THREE.MeshBasicMaterial).opacity = dim ? 0.1 : 0.3
 }

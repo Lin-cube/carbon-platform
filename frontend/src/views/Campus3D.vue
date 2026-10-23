@@ -48,7 +48,7 @@
     </div>
 
     <!-- 右侧统计 -->
-    <div class="overlay-panel right-panel">
+    <div class="overlay-panel right-panel" :class="{ 'hidden-by-drawer': !!selected }">
       <div class="panel-title">{{ siteId || '--' }} 园区概览</div>
       <div class="stat-row">
         <span>建筑数</span><b>{{ blobs.length }}</b>
@@ -76,37 +76,134 @@
       </div>
     </div>
 
-    <!-- 楼栋详情 -->
-    <transition name="slide">
-      <div v-if="selected" class="overlay-panel detail-panel">
-        <div class="panel-title">
-          {{ selected.buildingId }}
-          <el-icon class="close-btn" @click="selected = null"><Close /></el-icon>
+    <!-- ══════════ 右侧建筑详情抽屉（玻璃拟态） ══════════ -->
+    <transition name="drawer">
+      <aside v-if="selected" class="detail-drawer">
+        <header class="dd-head">
+          <div class="dd-head-main">
+            <div class="dd-title">{{ selected.buildingId }}</div>
+            <div class="dd-sub">
+              <span class="dd-site">{{ selected.siteId }}</span>
+              <span class="dd-dot">·</span>
+              <span>{{ selected.buildingTypeCn || '未标注类型' }}</span>
+            </div>
+          </div>
+          <button class="dd-close" type="button" @click="selected = null">
+            <el-icon><Close /></el-icon>
+          </button>
+        </header>
+
+        <div class="dd-badges">
+          <span class="dd-badge grade" :style="{ background: colorOf(selected) }">
+            评级 {{ selected.energyGrade || '未评级' }}
+          </span>
+          <span class="dd-badge soft">
+            数据 {{ selected.dataGrade || '--' }} 级 ·
+            {{ selected.dataGrade === 'A' ? '独立计量' : '站点分摊' }}
+          </span>
         </div>
-        <el-descriptions :column="1" size="small" border>
-          <el-descriptions-item label="建筑类型">{{ selected.buildingTypeCn || '--' }}</el-descriptions-item>
-          <el-descriptions-item label="建筑面积">{{ fmtNum(selected.areaM2, 0) }} m²</el-descriptions-item>
-          <el-descriptions-item label="年用电量">{{ fmtNum(selected.electricityKwhYear) }} kWh</el-descriptions-item>
-          <el-descriptions-item label="能耗强度">{{ selected.euiKwhM2Year ?? '--' }} kWh/m²·年</el-descriptions-item>
-          <el-descriptions-item label="能耗评级">
-            <el-tag :color="gradeColor(selected.energyGrade)" effect="dark" size="small"
-                    style="border: none; color: #fff">
-              {{ selected.energyGrade || '未评级' }}
-            </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="数据分级">
-            <el-tag size="small" :type="selected.dataGrade === 'A' ? 'success' : 'warning'" effect="plain">
-              {{ selected.dataGrade }} 级 · {{ selected.dataGrade === 'A' ? '独立计量' : '站点分摊' }}
-            </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="异常率">
-            {{ selected.anomalyRate != null ? (selected.anomalyRate * 100).toFixed(2) + '%' : '--' }}
-          </el-descriptions-item>
-        </el-descriptions>
-        <el-button size="small" type="primary" style="width: 100%; margin-top: 10px"
-                   @click="gotoAnomaly">查看异常诊断</el-button>
-      </div>
+
+        <div v-loading="detailLoading" class="dd-body">
+          <!-- 区间指标 -->
+          <div class="dd-section-title">统计区间 {{ rangeText }}</div>
+          <div class="dd-metrics">
+            <div class="dd-metric">
+              <span class="dd-metric-k">用电量</span>
+              <span class="dd-metric-v">
+                {{ detailMetrics?.electricityKwh != null
+                  ? fmtNum(detailMetrics.electricityKwh) : '--' }}
+                <i>kWh</i>
+              </span>
+            </div>
+            <div class="dd-metric">
+              <span class="dd-metric-k">空调能耗</span>
+              <span class="dd-metric-v" :class="{ muted: hvacText === '未单独计量' }">
+                {{ hvacText }}<i v-if="hvacText !== '未单独计量'">kWh</i>
+              </span>
+            </div>
+            <div class="dd-metric">
+              <span class="dd-metric-k">碳排放</span>
+              <span class="dd-metric-v">
+                {{ detailMetrics?.carbonKg != null ? fmtNum(detailMetrics.carbonKg) : '--' }}
+                <i>kgCO₂</i>
+              </span>
+            </div>
+            <div class="dd-metric">
+              <span class="dd-metric-k">异常小时</span>
+              <span class="dd-metric-v" :class="{ warn: (detailMetrics?.anomalyHours ?? 0) > 0 }">
+                {{ detailMetrics?.anomalyHours != null
+                  ? fmtNum(detailMetrics.anomalyHours) : '--' }}
+                <i>h</i>
+              </span>
+            </div>
+          </div>
+
+          <!-- 建筑档案 -->
+          <div class="dd-section-title">建筑档案</div>
+          <dl class="dd-list">
+            <div>
+              <dt>建筑面积</dt>
+              <dd>{{ detail?.area_m2 != null ? fmtNum(Number(detail.area_m2), 0) + ' m²' : '--' }}</dd>
+            </div>
+            <div>
+              <dt>能耗强度</dt>
+              <dd>
+                {{ detail?.eui_kwh_m2_year != null
+                  ? Number(detail.eui_kwh_m2_year).toFixed(1) + ' kWh/m²·年' : '--' }}
+              </dd>
+            </div>
+            <div>
+              <dt>年化电耗</dt>
+              <dd>{{ detail?.electricity_kwh_year != null
+                ? fmtNum(Number(detail.electricity_kwh_year)) + ' kWh' : '--' }}</dd>
+            </div>
+            <div>
+              <dt>年化碳排</dt>
+              <dd>{{ detail?.carbon_kg_year != null
+                ? fmtNum(Number(detail.carbon_kg_year)) + ' kg' : '--' }}</dd>
+            </div>
+            <div>
+              <dt>异常事件</dt>
+              <dd :class="{ warn: (anomalyTotal ?? 0) > 0 }">
+                {{ anomalyTotal != null ? anomalyTotal + ' 次' : '--' }}
+              </dd>
+            </div>
+            <div>
+              <dt>数据质量</dt>
+              <dd>{{ detail?.quality_rate != null
+                ? (Number(detail.quality_rate) * 100).toFixed(2) + '% 缺失/异常' : '--' }}</dd>
+            </div>
+          </dl>
+
+          <!-- 历史趋势 -->
+          <div class="dd-section-title">月度用电趋势</div>
+          <div v-if="trendOption" class="dd-chart">
+            <EChart :option="trendOption as never" height="132px" />
+          </div>
+          <div v-else class="dd-empty">该区间暂无月度数据</div>
+        </div>
+
+        <footer class="dd-foot">
+          <button class="dd-action" type="button" @click="gotoEnergyDetail">
+            <el-icon><TrendCharts /></el-icon>查看能耗详情
+          </button>
+          <button class="dd-action" type="button" @click="gotoDiagnosis">
+            <el-icon><Warning /></el-icon>查看异常
+          </button>
+          <button class="dd-action primary" type="button" @click="openAiForBuilding">
+            <el-icon><MagicStick /></el-icon>AI 分析此建筑
+          </button>
+        </footer>
+      </aside>
     </transition>
+
+    <!-- AI 单栋分析弹窗 -->
+    <el-dialog v-model="aiDialogVisible" width="620px" align-center
+               :title="`AI 分析 · ${aiBuildingId}`" class="ai-dialog">
+      <AiInsight v-if="aiDialogVisible" scope="diagnosis" :building-id="aiBuildingId"
+                 :start-date="app.startDate" :end-date="app.endDate"
+                 title="单栋诊断解读" />
+    </el-dialog>
 
     <!-- 3D 画布 -->
     <div ref="canvasHost" class="canvas-host"></div>
@@ -122,7 +219,7 @@
     </div>
 
     <!-- 右下角视角工具 -->
-    <div class="view-tools">
+    <div class="view-tools" :class="{ shifted: !!selected }">
       <el-tooltip content="恢复默认视角" placement="left">
         <button class="tool-btn" type="button" @click="resetView">
           <el-icon><Aim /></el-icon>
@@ -131,7 +228,7 @@
     </div>
 
     <!-- 右下角 AI 解读（可折叠，不遮挡画布） -->
-    <div class="ai-float" :class="{ collapsed: !aiOpen }">
+    <div class="ai-float" :class="{ collapsed: !aiOpen, shifted: !!selected }">
       <div class="ai-float-head" @click="aiOpen = !aiOpen">
         <span class="ai-float-title">
           <el-icon><MagicStick /></el-icon>
@@ -159,14 +256,16 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, reactive, computed, nextTick } from 'vue'
+import { onMounted, onBeforeUnmount, ref, reactive, computed, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { Close, Loading, Aim } from '@element-plus/icons-vue'
-import { energyApi } from '@/api'
+import { Close, Loading, Aim, TrendCharts, Warning } from '@element-plus/icons-vue'
+import { energyApi, analyticsApi } from '@/api'
+import { useAppStore } from '@/stores/app'
 import AiInsight from '@/components/AiInsight.vue'
+import EChart from '@/components/EChart.vue'
 import { MagicStick, ArrowDown, ArrowUp } from '@element-plus/icons-vue'
 import { fmtNum, gradeColor } from '@/utils/echarts'
 import {
@@ -180,6 +279,7 @@ import {
 import type { BuildingRow, SiteRow } from '@/types/api'
 
 const router = useRouter()
+const app = useAppStore()
 
 const canvasHost = ref<HTMLDivElement>()
 const sites = ref<SiteRow[]>([])
@@ -266,6 +366,14 @@ function initThree() {
   // preserveDrawingBuffer 仅在 ?capture=1 时开启：
   // 无头浏览器截图需要它才能拿到 WebGL 帧内容；正常工作时不开启（有性能代价）
   const captureMode = typeof location !== 'undefined' && location.search.includes('capture')
+  // 截图时禁用过渡：无头浏览器用虚拟时钟推进，动画可能停在中间帧，
+  // 会让面板看起来"半透明"。加个类彻底关掉过渡，保证截图确定性。
+  if (captureMode) {
+    // 用全局 <style> 注入（scoped 样式作用不到 html 层级）
+    const st = document.createElement('style')
+    st.textContent = '*,*::before,*::after{transition:none!important;animation:none!important}'
+    document.head.appendChild(st)
+  }
   renderer = new THREE.WebGLRenderer({
     antialias: true, alpha: false, preserveDrawingBuffer: captureMode,
   })
@@ -336,11 +444,12 @@ function initThree() {
     setTimeout(() => {
       try {
         const url = renderer!.domElement.toDataURL('image/png')
+        // 只盖在画布容器里，保持抽屉/面板可见
         const img = document.createElement('img')
         img.src = url
-        img.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;'
-          + 'object-fit:contain;z-index:9999;background:#ffffff'
-        document.body.appendChild(img)
+        img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;'
+          + 'object-fit:contain;z-index:0;background:#eaeef0'
+        host.appendChild(img)
       } catch (e) {
         console.error('snapshot failed', e)
       }
@@ -446,7 +555,9 @@ function focusCameraOn(target: THREE.Vector3) {
   cancelAnimationFrame(focusAnim)
   const startPos = camera.position.clone()
   const startTarget = controls.target.clone()
-  const dist = Math.max(60, camera.position.distanceTo(target) * 0.55)
+  // 聚焦距离收敛：原来 *0.55 会把镜头怼得太近，看不清建筑与周边关系
+  const dist = THREE.MathUtils.clamp(
+    camera.position.distanceTo(target) * 0.62, 150, 460)
   const dir = camera.position.clone().sub(target).normalize()
   const endPos = target.clone().add(dir.multiplyScalar(dist)).add(new THREE.Vector3(0, 18, 0))
   const t0 = performance.now()
@@ -640,6 +751,140 @@ function animate() {
 }
 
 // ---------------------------------------------------------------- 交互
+// ---------------------------------------------------------------- 建筑详情
+/**
+ * 建筑详情数据全部来自已有接口：
+ *   · energyApi.buildingDetail  → 类型 / 面积 / EUI / 年化碳排 / 数据质量
+ *   · energyApi.overview        → 选定区间的用电 / 空调 / 碳排 / 异常小时
+ *   · analyticsApi.scanAnomalies→ 异常事件总数
+ *   · energyApi.query           → 月度历史趋势
+ * 不构造任何假数据；接口没给的字段一律显示「--」或「未单独计量」。
+ */
+interface DetailMetrics {
+  electricityKwh: number | null
+  hvacKwh: number | null
+  carbonKg: number | null
+  anomalyHours: number | null
+  totalHours: number | null
+}
+
+const detail = ref<Record<string, unknown> | null>(null)
+const detailLoading = ref(false)
+const detailMetrics = ref<DetailMetrics | null>(null)
+const anomalyTotal = ref<number | null>(null)
+const trendOption = ref<Record<string, unknown> | null>(null)
+/** AI 单栋分析弹窗 */
+const aiDialogVisible = ref(false)
+const aiBuildingId = ref('')
+
+const rangeText = computed(() => `${app.startDate} ~ ${app.endDate}`)
+
+/**
+ * 空调能耗的展示口径：
+ * hvacKwh 为 0 或 null 时，说明该建筑没有可用的空调分项计量
+ * （BDG2 中此类建筑占多数），显示「未单独计量」而不是 0。
+ */
+const hvacText = computed(() => {
+  const v = detailMetrics.value?.hvacKwh
+  if (v == null || v === 0) return '未单独计量'
+  return `${fmtNum(v)} kWh`
+})
+
+async function loadDetail(b: BuildingRow | null) {
+  if (!b) {
+    detail.value = null
+    detailMetrics.value = null
+    anomalyTotal.value = null
+    trendOption.value = null
+    return
+  }
+  detailLoading.value = true
+  const start = app.startDate
+  const end = app.endDate
+  try {
+    const [d, ov, scan, series] = await Promise.all([
+      energyApi.buildingDetail(b.buildingId).catch(() => null),
+      energyApi.overview({
+        startDate: start, endDate: end, buildingId: b.buildingId,
+      }).catch(() => null),
+      analyticsApi.scanAnomalies({
+        startDate: start, endDate: end, buildingId: b.buildingId,
+        pageNum: 1, pageSize: 1,
+      }).catch(() => null),
+      energyApi.query({
+        startDate: start, endDate: end, buildingId: b.buildingId,
+        granularity: 'monthly',
+      }).catch(() => null),
+    ])
+
+    detail.value = (d as Record<string, unknown>) ?? null
+
+    const ovd = (ov as Record<string, number> | null) ?? null
+    detailMetrics.value = ovd
+      ? {
+          electricityKwh: ovd.electricityKwh ?? null,
+          hvacKwh: ovd.hvacKwh ?? null,
+          carbonKg: ovd.carbonKg ?? null,
+          anomalyHours: ovd.anomalyHours ?? null,
+          totalHours: ovd.totalHours ?? null,
+        }
+      : null
+
+    const sc = scan as { total?: number } | null
+    anomalyTotal.value = sc?.total ?? null
+
+    // 月度趋势
+    const pts = ((series as { points?: Array<Record<string, unknown>> } | null)?.points) || []
+    if (pts.length > 0) {
+      trendOption.value = {
+        grid: { left: 8, right: 8, top: 10, bottom: 4, containLabel: true },
+        xAxis: {
+          type: 'category',
+          data: pts.map((p) => String(p.time).slice(5)),
+          axisLine: { lineStyle: { color: '#d7dfe1' } },
+          axisTick: { show: false },
+          axisLabel: { color: '#7b8b84', fontSize: 10 },
+        },
+        yAxis: { type: 'value', splitLine: { lineStyle: { color: '#eef2f3' } },
+          axisLabel: { color: '#7b8b84', fontSize: 10 } },
+        tooltip: { trigger: 'axis' },
+        series: [{
+          type: 'line',
+          smooth: true,
+          symbolSize: 4,
+          data: pts.map((p) => p.electricityKwh ?? 0),
+          itemStyle: { color: '#35866b' },
+          areaStyle: { color: 'rgba(53,134,107,0.10)' },
+        }],
+      }
+    } else {
+      trendOption.value = null
+    }
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+/** 选中变化时加载详情 */
+watch(selected, (v) => { void loadDetail(v) })
+
+/** 打开「AI 分析此建筑」：复用 AiInsight 的 diagnosis 场景 */
+function openAiForBuilding() {
+  if (!selected.value) return
+  aiBuildingId.value = selected.value.buildingId
+  aiDialogVisible.value = true
+}
+
+/** 三个详情入口，全部落到已有路由 */
+function gotoEnergyDetail() {
+  if (!selected.value) return
+  router.push({ path: '/energy', query: { buildingId: selected.value.buildingId } })
+}
+function gotoDiagnosis() {
+  if (!selected.value) return
+  router.push({ path: '/anomaly', query: { buildingId: selected.value.buildingId } })
+}
+
 function applyColors() {
   const list = buildings.value
   for (const b of list) {
@@ -670,6 +915,18 @@ async function rebuild() {
 
     await nextTick()
     buildBuildings()
+
+    // 截图模式：?capture=1&sel=<buildingId> 自动选中一栋，便于回归验证详情抽屉
+    if (typeof location !== 'undefined' && location.search.includes('capture')) {
+      const want = new URLSearchParams(location.search).get('sel')
+      if (want) {
+        const hit = list.find((x) => x.buildingId === want)
+        if (hit) {
+          selected.value = hit
+          setFocusTarget(hit.buildingId)
+        }
+      }
+    }
   } finally {
     loading.value = false
   }
@@ -729,6 +986,270 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 浅色面板里的表单控件轻微收敛 */
+.left-panel :deep(.el-select__wrapper) {
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow: 0 0 0 1px rgba(53, 134, 107, 0.14) inset;
+}
+.left-panel :deep(.el-radio-button__inner) {
+  background: rgba(255, 255, 255, 0.7);
+  border-color: rgba(53, 134, 107, 0.16);
+  color: #46584f;
+  box-shadow: none;
+}
+.left-panel :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
+  background: #327f66;
+  border-color: #327f66;
+  color: #fff;
+  box-shadow: none;
+}
+.left-panel :deep(.el-divider) {
+  border-color: rgba(37, 61, 53, 0.08);
+}
+
+/* ══════════════ 右侧建筑详情抽屉 ══════════════ */
+.detail-drawer {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  bottom: 14px;
+  width: 396px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  border-radius: 20px;
+  /* 0.93：即使浏览器不支持 backdrop-filter（或软件渲染），文字也保持清晰 */
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 24px 60px -26px rgba(37, 61, 53, 0.34),
+    0 6px 18px -10px rgba(37, 61, 53, 0.12);
+  backdrop-filter: blur(18px) saturate(120%);
+  -webkit-backdrop-filter: blur(18px) saturate(120%);
+  overflow: hidden;
+}
+
+.dd-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 18px 18px 12px;
+}
+.dd-head-main { flex: 1; min-width: 0; }
+.dd-title {
+  font-size: 15.5px;
+  font-weight: 600;
+  color: #253d35;
+  line-height: 1.35;
+  word-break: break-all;
+}
+.dd-sub {
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #5d6e66;
+}
+.dd-site {
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: rgba(53, 134, 107, 0.1);
+  color: #2f7a61;
+}
+.dd-dot { color: #b6c3bd; }
+.dd-close {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 9px;
+  background: rgba(37, 61, 53, 0.05);
+  color: #5d6e66;
+  cursor: pointer;
+  transition: background 0.16s ease;
+}
+.dd-close:hover { background: rgba(37, 61, 53, 0.1); }
+
+.dd-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 18px 12px;
+}
+.dd-badge {
+  padding: 3px 10px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #ffffff;
+  letter-spacing: 0.02em;
+}
+.dd-badge.soft {
+  background: rgba(37, 61, 53, 0.06);
+  color: #46584f;
+  font-weight: 400;
+}
+
+.dd-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 18px 8px;
+}
+.dd-section-title {
+  margin: 14px 0 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #7b8b84;
+  text-transform: uppercase;
+}
+.dd-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.dd-metric {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.66);
+  border: 1px solid rgba(53, 134, 107, 0.1);
+}
+.dd-metric-k {
+  display: block;
+  font-size: 11.5px;
+  color: #7b8b84;
+  margin-bottom: 5px;
+}
+.dd-metric-v {
+  font-size: 15px;
+  font-weight: 600;
+  color: #253d35;
+  font-variant-numeric: tabular-nums;
+}
+.dd-metric-v i {
+  margin-left: 3px;
+  font-size: 10.5px;
+  font-weight: 400;
+  font-style: normal;
+  color: #8b9d95;
+}
+.dd-metric-v.muted { font-size: 12.5px; font-weight: 500; color: #8b9d95; }
+.dd-metric-v.warn { color: #b4574c; }
+
+.dd-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1px;
+  background: rgba(37, 61, 53, 0.06);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.dd-list > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  background: rgba(255, 255, 255, 0.7);
+}
+.dd-list dt {
+  font-size: 12px;
+  color: #7b8b84;
+}
+.dd-list dd {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #253d35;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.dd-list dd.warn { color: #b4574c; }
+
+.dd-chart {
+  padding: 8px 6px 4px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.66);
+  border: 1px solid rgba(53, 134, 107, 0.08);
+}
+.dd-empty {
+  padding: 18px;
+  text-align: center;
+  font-size: 12px;
+  color: #8b9d95;
+  border-radius: 12px;
+  background: rgba(37, 61, 53, 0.03);
+}
+
+.dd-foot {
+  display: flex;
+  gap: 8px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid rgba(37, 61, 53, 0.07);
+}
+.dd-action {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 36px;
+  padding: 0 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(53, 134, 107, 0.18);
+  background: rgba(255, 255, 255, 0.8);
+  color: #2f7a61;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.dd-action:hover {
+  background: #ffffff;
+  border-color: rgba(53, 134, 107, 0.4);
+}
+.dd-action.primary {
+  background: #327f66;
+  border-color: #327f66;
+  color: #ffffff;
+}
+.dd-action.primary:hover { background: #2c755c; }
+
+/* 抽屉滑入 */
+.drawer-enter-active, .drawer-leave-active {
+  transition: transform 0.34s cubic-bezier(0.22, 0.61, 0.36, 1), opacity 0.28s ease;
+}
+.drawer-enter-from, .drawer-leave-to {
+  transform: translateX(24px);
+  opacity: 0;
+}
+
+/* 小屏：抽屉铺满右侧、降低宽度 */
+@media (max-width: 1280px) {
+  .detail-drawer { width: 352px; }
+}
+@media (max-width: 900px) {
+  .detail-drawer {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    top: auto;
+    height: 62%;
+    border-radius: 18px;
+  }
+}
+
+/* 减少动态效果偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .drawer-enter-active, .drawer-leave-active { transition: none; }
+}
+
 /* 悬停提示：玻璃拟态小卡片 */
 .hover-tip {
   position: fixed;
@@ -757,6 +1278,10 @@ onBeforeUnmount(() => {
 .hover-tip-grade {
   color: #35866b;
 }
+
+/* 详情抽屉打开时，AI 卡与视角工具左移让位，避免遮挡 */
+.ai-float.shifted { right: 424px; }
+.view-tools.shifted { right: 424px; }
 
 /* 右下角视角工具条 */
 .view-tools {
@@ -802,6 +1327,7 @@ onBeforeUnmount(() => {
   right: 16px;
   bottom: 16px;
   width: 460px;
+  transition: right 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
   max-height: 46vh;
   display: flex;
   flex-direction: column;
@@ -876,23 +1402,30 @@ onBeforeUnmount(() => {
 .overlay-panel {
   position: absolute;
   z-index: 10;
-  background: rgba(15, 27, 47, 0.9);
-  border: 1px solid #1e3a5f;
-  border-radius: 8px;
-  padding: 13px 15px;
-  color: #dbe7f7;
-  backdrop-filter: blur(8px);
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.4);
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  border-radius: 16px;
+  padding: 14px 16px;
+  color: #253d35;
+  backdrop-filter: blur(18px) saturate(118%);
+  -webkit-backdrop-filter: blur(18px) saturate(118%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 18px 44px -22px rgba(37, 61, 53, 0.3),
+    0 4px 12px -8px rgba(37, 61, 53, 0.1);
 }
 
-.left-panel { left: 14px; top: 14px; width: 232px; }
-.right-panel { right: 14px; top: 14px; width: 208px; }
+.left-panel { left: 14px; top: 14px; width: 244px; }
+.right-panel { right: 14px; top: 14px; width: 214px; }
+/* 旧详情面板已由右侧玻璃抽屉取代 */
 .detail-panel { right: 14px; bottom: 14px; width: 300px; }
+/* 抽屉打开时，右上角概览让位，避免被遮挡 */
+.right-panel.hidden-by-drawer { opacity: 0; pointer-events: none; }
 
 .panel-title {
   font-size: 13px;
   font-weight: 600;
-  color: #7dd3fc;
+  color: #253d35;
   margin-bottom: 11px;
   display: flex;
   justify-content: space-between;
@@ -906,22 +1439,22 @@ onBeforeUnmount(() => {
 .field label {
   display: block;
   font-size: 11px;
-  color: #8ba0c0;
+  color: #7b8b84;
   margin-bottom: 5px;
 }
 
-.legend-title { font-size: 11px; color: #8ba0c0; margin-bottom: 6px; }
+.legend-title { font-size: 11px; color: #7b8b84; margin-bottom: 6px; }
 .legend-item {
   display: flex;
   align-items: center;
   gap: 7px;
   font-size: 11.5px;
   padding: 2.5px 0;
-  color: #c3d4ea;
+  color: #46584f;
 }
 .swatch { width: 11px; height: 11px; border-radius: 2px; flex-shrink: 0; }
 
-.hint { font-size: 11px; color: #7c95bb; line-height: 1.85; }
+.hint { font-size: 11px; color: #7b8b84; line-height: 1.9; }
 
 .stat-row {
   display: flex;
@@ -929,12 +1462,12 @@ onBeforeUnmount(() => {
   align-items: center;
   font-size: 12px;
   padding: 5px 0;
-  border-bottom: 1px dashed #1e3a5f;
+  border-bottom: 1px dashed rgba(37, 61, 53, 0.1);
 }
 .stat-row:last-child { border-bottom: none; }
-.stat-row span { color: #8ba0c0; }
-.stat-row b { color: #e6edf7; font-variant-numeric: tabular-nums; }
-.stat-row b.warn { color: #f97316; }
+.stat-row span { color: #6f8085; }
+.stat-row b { color: #253d35; font-variant-numeric: tabular-nums; }
+.stat-row b.warn { color: #b4574c; }
 
 .canvas-mask {
   position: absolute;
