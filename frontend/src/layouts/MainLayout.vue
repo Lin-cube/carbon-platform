@@ -29,16 +29,6 @@
         </div>
 
         <div class="header-right">
-          <el-tooltip :content="aiStatusText" placement="bottom">
-            <span class="status-dot" :class="aiStatus">
-              <span class="dot"></span>AI 服务
-            </span>
-          </el-tooltip>
-
-          <el-tag size="small" type="success" effect="plain">
-            数据 {{ fmtInt(overview?.energyRows) }} 行
-          </el-tag>
-
           <el-dropdown @command="onCommand">
             <span class="user">
               <el-avatar :size="26" class="user-avatar">
@@ -95,17 +85,12 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/stores/user'
 import { useAppStore } from '@/stores/app'
-import { systemApi, aiApi } from '@/api'
-import { fmtInt } from '@/utils/echarts'
-import type { SystemOverview } from '@/types/api'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const app = useAppStore()
 
-const overview = ref<SystemOverview | null>(null)
-const aiStatus = ref<'up' | 'down' | 'unknown'>('unknown')
 const profileVisible = ref(false)
 
 const menus = [
@@ -117,12 +102,6 @@ const menus = [
   { path: '/assistant', title: '小E 助手', icon: 'ChatDotRound' },
   { path: '/import', title: '数据导入', icon: 'Upload' }
 ]
-
-const aiStatusText = computed(() => {
-  if (aiStatus.value === 'up') return 'AI 服务正常（当前为本地联调模式或已接入 RAGFlow）'
-  if (aiStatus.value === 'down') return 'AI 服务不可达，AI 问答可能不可用'
-  return 'AI 服务状态检测中'
-})
 
 function roleLabel(r: string) {
   return r === 'admin' ? '管理员' : r === 'operator' ? '运维人员' : r === 'viewer' ? '只读' : r
@@ -142,15 +121,6 @@ async function onCommand(cmd: string) {
 }
 
 onMounted(async () => {
-  try {
-    overview.value = await systemApi.overview()
-  } catch { /* 忽略 */ }
-  try {
-    const h = await aiApi.health()
-    aiStatus.value = h.status === 'UP' ? 'up' : 'down'
-  } catch {
-    aiStatus.value = 'down'
-  }
   if (!userStore.info) {
     try { await userStore.fetchInfo() } catch { /* 忽略 */ }
   }
@@ -242,20 +212,6 @@ onMounted(async () => {
 .crumb { font-size: 15px; font-weight: 600; color: var(--carbon-text, #253D35); }
 
 .header-right { display: flex; align-items: center; gap: 16px; }
-
-.status-dot {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--carbon-text-dim, #5D6E66);
-  cursor: default;
-}
-.status-dot .dot {
-  width: 8px; height: 8px; border-radius: 50%; background: #A9B4B8;
-}
-.status-dot.up .dot { background: #4F9D77; box-shadow: 0 0 6px rgba(79, 157, 119, 0.6); }
-.status-dot.down .dot { background: #C26B62; }
 
 .user {
   display: flex; align-items: center; gap: 8px;
