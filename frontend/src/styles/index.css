@@ -1,14 +1,9 @@
-:root {
-  --carbon-bg: #0b1220;
-  --carbon-panel: #111a2e;
-  --carbon-border: #1e2b45;
-  --carbon-primary: #2f7dff;
-  --carbon-success: #22c55e;
-  --carbon-warning: #f59e0b;
-  --carbon-danger: #ef4444;
-  --carbon-text: #e6edf7;
-  --carbon-text-dim: #8ba0c0;
-}
+@import './tokens.css';
+
+/* ============================================================================
+ * 全局基础与通用工具类
+ * 消费 tokens.css 中的设计变量；保留既有类名，仅重设观感为浅色统一风格。
+ * ========================================================================== */
 
 * { box-sizing: border-box; }
 
@@ -19,28 +14,33 @@ html, body, #app {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei',
-    'Helvetica Neue', Arial, sans-serif;
-  background: #f4f6fa;
-  color: #1f2937;
-}
-
-/* 深色主题区域（看板 / 3D 园区） */
-.carbon-dark {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-base);
   background: var(--carbon-bg);
-  color: var(--carbon-text);
+  color: var(--carbon-text-regular);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
+/* 深色主题区域占位（当前无模板使用，保留兼容；深海军蓝结构色） */
+.carbon-dark {
+  background: var(--carbon-navy);
+  color: #E6EDF7;
+}
+
+/* ── 通用卡片（Panel / Card 统一）────────────────────────────────────── */
 .page-card {
-  background: #fff;
-  border-radius: 8px;
-  padding: 16px 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  background: var(--carbon-panel);
+  border: 1px solid var(--carbon-border);
+  border-radius: var(--radius-lg);
+  padding: var(--sp-4) var(--sp-5);
+  box-shadow: var(--shadow-sm);
 }
 
 .page-title {
-  font-size: 17px;
+  font-size: var(--font-size-xl);
   font-weight: 600;
+  color: var(--carbon-text);
   margin: 0 0 14px;
   display: flex;
   align-items: center;
@@ -63,7 +63,7 @@ body {
   margin-bottom: 14px;
 }
 
-/* KPI 指标卡 */
+/* ── KPI 指标卡 ── */
 .kpi-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -72,55 +72,61 @@ body {
 }
 
 .kpi-card {
-  background: #fff;
-  border-radius: 8px;
+  background: var(--carbon-panel);
+  border: 1px solid var(--carbon-border);
+  border-radius: var(--radius-lg);
   padding: 14px 16px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--shadow-sm);
   border-left: 3px solid var(--carbon-primary);
 }
 
-.kpi-card.green { border-left-color: var(--carbon-success); }
+.kpi-card.green  { border-left-color: var(--carbon-success); }
 .kpi-card.orange { border-left-color: var(--carbon-warning); }
-.kpi-card.red { border-left-color: var(--carbon-danger); }
+.kpi-card.red    { border-left-color: var(--carbon-danger); }
 
 .kpi-label {
-  font-size: 12px;
-  color: #6b7280;
+  font-size: var(--font-size-sm);
+  color: var(--carbon-text-dim);
   margin-bottom: 6px;
+  display: flex;
+  align-items: center;
 }
 
 .kpi-value {
-  font-size: 22px;
+  font-size: var(--font-size-3xl);
   font-weight: 600;
   line-height: 1.2;
+  color: var(--carbon-text);
   font-variant-numeric: tabular-nums;
 }
 
 .kpi-unit {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 400;
-  color: #9ca3af;
+  color: var(--carbon-text-mute);
   margin-left: 3px;
 }
 
 .kpi-sub {
-  font-size: 11px;
-  color: #9ca3af;
+  font-size: var(--font-size-xs);
+  color: var(--carbon-text-mute);
   margin-top: 4px;
 }
 
+/* ── 图表容器 ── */
 .chart-box {
-  background: #fff;
-  border-radius: 8px;
+  background: var(--carbon-panel);
+  border: 1px solid var(--carbon-border);
+  border-radius: var(--radius-lg);
   padding: 14px 16px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--shadow-sm);
 }
 
 .chart-title {
-  font-size: 14px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   margin-bottom: 10px;
-  color: #374151;
+  color: var(--carbon-text);
 }
 
 .grid-2 {
@@ -129,7 +135,7 @@ body {
   gap: 12px;
 }
 
-/* 数据来源标注徽章（实测/推算/仿真） */
+/* ── 数据来源标注徽章（实测 / 推算 / 仿真 / 标注）──────────────────── */
 .src-badge {
   display: inline-block;
   font-size: 10px;
@@ -139,12 +145,12 @@ body {
   vertical-align: middle;
   font-weight: 400;
 }
-.src-measured { background: #dcfce7; color: #15803d; }
-.src-derived { background: #fef3c7; color: #b45309; }
-.src-simulated { background: #e0e7ff; color: #4338ca; }
-.src-labeled { background: #fce7f3; color: #be185d; }
+.src-measured  { background: #E4F2EA; color: #2F7A61; }
+.src-derived   { background: #F7EED8; color: #8A6D2F; }
+.src-simulated { background: #E6EEF4; color: #3D5E75; }
+.src-labeled   { background: #F6E6E4; color: #9B564E; }
 
 .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, Menlo, Consolas, monospace; }
-.text-dim { color: #6b7280; }
+.text-dim { color: var(--carbon-text-dim); }
 .mt-12 { margin-top: 12px; }
 .mb-12 { margin-bottom: 12px; }

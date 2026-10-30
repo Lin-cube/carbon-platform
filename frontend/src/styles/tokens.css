@@ -1,0 +1,302 @@
+/* ============================================================================
+ * 碳能智控 · CSS Design Tokens 与组件主题
+ * ----------------------------------------------------------------------------
+ * 设计基调：清新 / 明亮 / 自然 / 精致
+ * 与 3D 浅色沙盘（src/three/palette.ts）协调：
+ *   - 品牌绿      #35866B（鼠尾草绿，与沙盘 accent/highlight 一致）
+ *   - 深海军蓝导航 #0F2038（侧栏结构色）
+ *   - 雾白背景    #F7F9F6（暖白，与沙盘地面/墙体一致）
+ * 本文档只改"全站设计基础"，不触碰业务页面布局与 3D WebGL 场景。
+ * ========================================================================== */
+
+:root {
+  /* ── 品牌色 ─────────────────────────────────────────────────────────── */
+  --carbon-primary: #35866B;          /* 品牌绿（鼠尾草绿） */
+  --carbon-primary-hover: #2C755C;    /* hover 加深 */
+  --carbon-primary-active: #286B53;   /* active */
+  --carbon-primary-soft: #EBF3F0;     /* 极淡绿底（选中/浅色填充） */
+
+  /* ── 深海军蓝（导航结构色）────────────────────────────────────────── */
+  --carbon-navy: #0F2038;
+  --carbon-navy-soft: #16283F;
+  --carbon-navy-hover: #1B3047;
+
+  /* ── 背景 / 面板 / 边框 ─────────────────────────────────────────────── */
+  --carbon-bg: #F7F9F6;               /* 雾白页面背景 */
+  --carbon-bg-soft: #EEF2EF;          /* 更浅的灰绿底 */
+  --carbon-panel: #FFFFFF;            /* 卡片白底 */
+  --carbon-border: #E3E9E4;           /* 细边框 */
+  --carbon-border-strong: #D5DED7;
+
+  /* ── 语义色（柔和、可辨、非高饱和）────────────────────────────────── */
+  --carbon-success: #4F9D77;
+  --carbon-warning: #D9B65C;
+  --carbon-danger: #C26B62;
+  --carbon-info: #5B8FA8;
+
+  /* ── 文字层级 ─────────────────────────────────────────────────────── */
+  --carbon-text: #253D35;             /* 主标题 / 正文强调 */
+  --carbon-text-regular: #46584F;     /* 正文 */
+  --carbon-text-dim: #5D6E66;         /* 辅助文字（AA） */
+  --carbon-text-mute: #7B8B84;        /* 弱化文字 / 占位 */
+  --carbon-text-on-primary: #FFFFFF;
+
+  /* ── 字体层级 ─────────────────────────────────────────────────────── */
+  --font-family-base: -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 15px;
+  --font-size-xl: 17px;
+  --font-size-2xl: 20px;
+  --font-size-3xl: 24px;
+
+  /* ── 圆角 ─────────────────────────────────────────────────────────── */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-2xl: 24px;
+
+  /* ── 阴影（轻、柔和）──────────────────────────────────────────────── */
+  --shadow-xs: 0 1px 2px rgba(37, 61, 53, 0.05);
+  --shadow-sm: 0 1px 3px rgba(37, 61, 53, 0.07);
+  --shadow-md: 0 6px 18px -8px rgba(37, 61, 53, 0.16);
+  --shadow-lg: 0 16px 40px -18px rgba(37, 61, 53, 0.22);
+
+  /* ── 间距 ─────────────────────────────────────────────────────────── */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+  --sp-8: 40px;
+
+  /* ════════════════════════════════════════════════════════════════════
+   * Element Plus 主题覆盖（EP 2.x 基于 CSS 变量，运行时覆盖即可，
+   * 无需 SCSS 二次构建）
+   * ═══════════════════════════════════════════════════════════════════ */
+  --el-color-primary: #35866B;
+  --el-color-primary-light-3: #72AA97;
+  --el-color-primary-light-5: #9AC2B5;
+  --el-color-primary-light-7: #C2DBD3;
+  --el-color-primary-light-8: #D7E7E1;
+  --el-color-primary-light-9: #EBF3F0;
+  --el-color-primary-dark-2: #2A6B56;
+
+  --el-color-success: #4F9D77;
+  --el-color-success-light-3: #84BAA0;
+  --el-color-success-light-5: #A7CEBB;
+  --el-color-success-light-7: #CAE2D6;
+  --el-color-success-light-8: #DCEBE4;
+  --el-color-success-light-9: #EDF5F1;
+  --el-color-success-dark-2: #3F7E5F;
+
+  --el-color-warning: #D9B65C;
+  --el-color-warning-light-3: #E4CC8D;
+  --el-color-warning-light-5: #ECDAAE;
+  --el-color-warning-light-7: #F4E9CE;
+  --el-color-warning-light-8: #F7F0DE;
+  --el-color-warning-light-9: #FBF8EF;
+  --el-color-warning-dark-2: #AE924A;
+
+  --el-color-danger: #C26B62;
+  --el-color-error: #C26B62;
+  --el-color-danger-light-3: #D49791;
+  --el-color-danger-light-5: #E0B5B0;
+  --el-color-danger-light-7: #EDD3D0;
+  --el-color-danger-light-8: #F3E1E0;
+  --el-color-danger-light-9: #F9F0EF;
+  --el-color-danger-dark-2: #9B564E;
+  --el-color-error-light-3: #D49791;
+  --el-color-error-light-5: #E0B5B0;
+  --el-color-error-light-7: #EDD3D0;
+  --el-color-error-light-8: #F3E1E0;
+  --el-color-error-light-9: #F9F0EF;
+  --el-color-error-dark-2: #9B564E;
+
+  --el-color-info: #5B8FA8;
+  --el-color-info-light-3: #8CB1C2;
+  --el-color-info-light-5: #ADC7D4;
+  --el-color-info-light-7: #CEDDE5;
+  --el-color-info-light-8: #DEE9EE;
+  --el-color-info-light-9: #EFF4F6;
+  --el-color-info-dark-2: #497286;
+
+  /* 文字 */
+  --el-text-color-primary: #253D35;
+  --el-text-color-regular: #46584F;
+  --el-text-color-secondary: #5D6E66;
+  --el-text-color-placeholder: #7B8B84;
+  --el-text-color-disabled: #A9B4B8;
+
+  /* 边框 / 填充 */
+  --el-border-color: #DCE4DE;
+  --el-border-color-light: #E4EAE6;
+  --el-border-color-lighter: #EDF1EE;
+  --el-border-color-extra-light: #F3F6F4;
+  --el-border-color-dark: #C6D1C9;
+  --el-fill-color: #F3F6F4;
+  --el-fill-color-light: #F7F9F8;
+  --el-fill-color-lighter: #FAFBFA;
+  --el-fill-color-extra-light: #FCFDFC;
+  --el-fill-color-blank: #FFFFFF;
+  --el-fill-color-dark: #E8EDEA;
+
+  /* 背景 */
+  --el-bg-color: #FFFFFF;
+  --el-bg-color-page: #F7F9F6;
+  --el-bg-color-overlay: #FFFFFF;
+
+  /* 圆角 / 字体 */
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
+  --el-border-radius-round: 999px;
+  --el-font-family: var(--font-family-base);
+  --el-font-size-base: 13px;
+  --el-font-size-small: 12px;
+  --el-font-size-large: 14px;
+
+  /* 阴影 */
+  --el-box-shadow: var(--shadow-sm);
+  --el-box-shadow-light: var(--shadow-xs);
+  --el-box-shadow-lighter: var(--shadow-xs);
+  --el-box-shadow-dark: var(--shadow-md);
+}
+
+/* ============================================================================
+ * 基础组件主题（统一按钮 / 输入框 / 日期选择器 / 下拉框 / 标签 / 抽屉）
+ * 原则：卡片白底、细边框、轻阴影、主要按钮用鼠尾草绿；不用大面积玻璃滤镜。
+ * ========================================================================== */
+
+/* ── 按钮 ── */
+.el-button {
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+}
+.el-button--primary {
+  --el-button-text-color: #FFFFFF;
+  --el-button-bg-color: var(--el-color-primary);
+  --el-button-border-color: var(--el-color-primary);
+  --el-button-hover-bg-color: #2C755C;
+  --el-button-hover-border-color: #2C755C;
+  --el-button-active-bg-color: #286B53;
+  --el-button-active-border-color: #286B53;
+}
+
+/* ── 输入框 / 文本域 / 数字输入 ── */
+.el-input__wrapper,
+.el-textarea__inner {
+  border-radius: var(--radius-sm);
+}
+.el-input__wrapper {
+  transition: box-shadow 0.18s ease, background-color 0.18s ease;
+}
+.el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 1px var(--el-color-primary) inset,
+              0 0 0 3px rgba(53, 134, 107, 0.1);
+}
+
+/* ── 下拉框 / 级联 ── */
+.el-select__wrapper {
+  border-radius: var(--radius-sm);
+}
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px var(--el-color-primary) inset,
+              0 0 0 3px rgba(53, 134, 107, 0.1);
+}
+
+/* ── 日期选择器 ── */
+.el-date-editor {
+  border-radius: var(--radius-sm);
+}
+.el-picker-panel {
+  border-radius: var(--radius-md);
+}
+
+/* ── 标签 ── */
+.el-tag {
+  border-radius: var(--radius-xs);
+}
+
+/* ── 抽屉 / 对话框 / 卡片 ── */
+.el-drawer,
+.el-dialog {
+  border-radius: var(--radius-xl);
+}
+.el-card {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--carbon-border);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ── 表格 ── */
+.el-table {
+  --el-table-border-color: var(--el-border-color-lighter);
+  --el-table-header-bg-color: var(--el-fill-color-light);
+  --el-table-header-text-color: var(--carbon-text-dim);
+  font-size: var(--font-size-base);
+}
+.el-table th.el-table__cell {
+  font-weight: 600;
+}
+
+/* ── 标签页 ── */
+.el-tabs__item {
+  color: var(--carbon-text-dim);
+}
+.el-tabs__item.is-active {
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+.el-tabs__active-bar {
+  background-color: var(--el-color-primary);
+}
+
+/* ── Tooltip / Popover ── */
+.el-popper.is-light {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--carbon-border);
+  box-shadow: var(--shadow-md);
+}
+
+/* ── 骨架屏 / 空状态 / 加载 ── */
+.el-skeleton__item {
+  background: linear-gradient(90deg,
+    var(--el-fill-color-lighter) 25%,
+    var(--el-fill-color) 37%,
+    var(--el-fill-color-lighter) 63%);
+  background-size: 400% 100%;
+}
+.el-empty__description {
+  color: var(--carbon-text-mute);
+}
+
+/* ============================================================================
+ * 可访问性：键盘焦点可见 + 减少动态效果偏好
+ * ========================================================================== */
+
+/* 键盘导航时的焦点环：仅在键盘操作时出现（鼠标点击不显示） */
+:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.el-button:focus-visible,
+.el-input__wrapper:focus-visible,
+.el-select__wrapper:focus-visible {
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
