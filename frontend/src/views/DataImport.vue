@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div class="page-card mb-12">
+    <div class="page-card wizard-step mb-12">
       <div class="page-title-row">
         <div class="page-title">数据导入与治理 · 五步向导</div>
         <!-- 审计记录入口：原来只能走完向导第 5 步才能看到历史批次，
@@ -20,7 +20,7 @@
     </div>
 
     <!-- ============ 步骤 1：数据源选择 ============ -->
-    <div v-show="step === 0" class="page-card">
+    <div v-show="step === 0" class="page-card wizard-step">
       <div class="page-title">步骤一 · 选择数据源</div>
 
       <el-upload ref="uploadRef" drag :auto-upload="false" :limit="1" accept=".csv,.xlsx,.xls"
@@ -36,12 +36,19 @@
       </el-upload>
 
       <div v-if="uploadResult" class="mt-12">
-        <el-alert type="success" :closable="false" show-icon>
-          <template #title>
-            已解析 <b>{{ uploadResult.fileName }}</b>：
-            {{ uploadResult.totalRows }} 行数据、{{ uploadResult.columns?.length }} 列
-          </template>
-        </el-alert>
+        <!-- 文件信息卡：文件名 / 大小 / 格式 / 解析状态 -->
+        <div class="file-info">
+          <el-icon class="file-icon"><Document /></el-icon>
+          <div class="file-meta">
+            <div class="file-name">{{ uploadResult.fileName }}</div>
+            <div class="file-sub">
+              <span class="file-badge">{{ (uploadResult.fileType || '文件').toUpperCase() }}</span>
+              <span>{{ fmtSize(uploadResult.fileSize) }}</span>
+              <span>{{ uploadResult.totalRows }} 行 · {{ uploadResult.columns?.length }} 列</span>
+              <span class="parse-ok"><span class="parse-dot"></span>已解析</span>
+            </div>
+          </div>
+        </div>
 
         <el-alert v-for="(w, i) in uploadResult.warnings" :key="i" type="warning"
                   :closable="false" show-icon class="mt-12" :title="w" />
@@ -63,10 +70,15 @@
     </div>
 
     <!-- ============ 步骤 2：字段映射 ============ -->
-    <div v-show="step === 1" class="page-card">
+    <div v-show="step === 1" class="page-card wizard-step">
       <div class="page-title">步骤二 · 字段映射</div>
       <el-alert type="info" :closable="false" show-icon class="mb-12"
                 title="系统已根据列名与数据特征自动匹配目标字段，请确认或调整。标记「必填」的字段必须映射。" />
+
+      <el-alert v-if="duplicateMappings.length" type="warning" :closable="false" show-icon class="mb-12"
+                :title="`存在重复映射：${duplicateMappings.join('、')} 被多个源列映射到同一目标字段，请调整。`" />
+      <el-alert v-if="missingRequired.length" type="error" :closable="false" show-icon class="mb-12"
+                :title="`必填字段未映射：${missingRequired.join('、')}。`" />
 
       <el-table :data="uploadResult?.columns || []" size="small" border>
         <el-table-column prop="sourceColumn" label="源列名" min-width="130" />
@@ -107,52 +119,75 @@
 
       <div class="step-actions">
         <el-button @click="step = 0">上一步</el-button>
-        <el-button type="primary" @click="step = 2">下一步：清洗规则</el-button>
+        <el-button type="primary" :disabled="missingRequired.length > 0 || duplicateMappings.length > 0"
+                   @click="step = 2">下一步：清洗规则</el-button>
       </div>
     </div>
 
     <!-- ============ 步骤 3：清洗规则 ============ -->
-    <div v-show="step === 2" class="page-card">
+    <div v-show="step === 2" class="page-card wizard-step">
       <div class="page-title">步骤三 · 清洗规则</div>
 
-      <el-form :model="cleanRules" label-width="150px" style="max-width: 760px">
-        <el-form-item label="去除首尾空格">
-          <el-switch v-model="cleanRules.trimString" />
-          <span class="ml8 text-dim">建议开启，避免「 建筑A」与「建筑A」被当作不同建筑</span>
-        </el-form-item>
-
-        <el-form-item label="剔除负值能耗">
-          <el-switch v-model="cleanRules.dropNegative" />
-          <span class="ml8 text-dim">能耗不可能为负，负值通常为表计或采集异常</span>
-        </el-form-item>
-
-        <el-form-item label="缺失值处理">
+      <div class="rule-grid">
+        <!-- 缺失值处理 -->
+        <div class="rule-card">
+          <div class="rule-head">缺失值处理</div>
           <el-radio-group v-model="cleanRules.missingStrategy">
             <el-radio value="none">保留为空</el-radio>
             <el-radio value="zero">填 0</el-radio>
             <el-radio value="drop">整行剔除</el-radio>
           </el-radio-group>
-        </el-form-item>
+          <div class="rule-conseq">决定空值如何进入数据库：保留为空会留 NULL，填 0 可能低估，整行剔除会减少有效行。</div>
+        </div>
 
-        <el-form-item label="建筑编号前缀">
-          <el-input v-model="cleanRules.buildingIdPrefix" style="width: 330px"
-                    placeholder="例如 Demo（源数据无园区前缀时自动补齐）" />
-        </el-form-item>
-
-        <el-form-item label="电量单位">
-          <el-radio-group v-model="cleanRules.electricityUnit">
-            <el-radio value="kwh">kWh</el-radio>
-            <el-radio value="mwh">MWh（自动 ×1000）</el-radio>
-          </el-radio-group>
-        </el-form-item>
-
-        <el-form-item label="去重策略">
+        <!-- 去重策略 -->
+        <div class="rule-card">
+          <div class="rule-head">去重策略</div>
           <el-radio-group v-model="cleanRules.dedupStrategy">
             <el-radio value="byBuildingTime">按「建筑+时间」去重（推荐）</el-radio>
             <el-radio value="none">不去重</el-radio>
           </el-radio-group>
-        </el-form-item>
-      </el-form>
+          <div class="rule-conseq">重复导入同一时段的记录会被覆盖/跳过，避免同一行被统计两次。</div>
+        </div>
+
+        <!-- 数值类型 / 负值 -->
+        <div class="rule-card">
+          <div class="rule-head">数值类型与负值</div>
+          <div class="rule-switch">
+            <span>剔除负值能耗</span>
+            <el-switch v-model="cleanRules.dropNegative" />
+          </div>
+          <div class="rule-conseq">能耗不可能为负，负值通常为表计或采集异常，剔除避免污染统计。</div>
+        </div>
+
+        <!-- 文本整理 -->
+        <div class="rule-card">
+          <div class="rule-head">文本整理</div>
+          <div class="rule-switch">
+            <span>去除首尾空格</span>
+            <el-switch v-model="cleanRules.trimString" />
+          </div>
+          <div class="rule-conseq">建议开启，避免「 建筑A」与「建筑A」被当作不同建筑。</div>
+        </div>
+
+        <!-- 电量单位 -->
+        <div class="rule-card">
+          <div class="rule-head">电量单位</div>
+          <el-radio-group v-model="cleanRules.electricityUnit">
+            <el-radio value="kwh">kWh</el-radio>
+            <el-radio value="mwh">MWh（自动 ×1000）</el-radio>
+          </el-radio-group>
+          <div class="rule-conseq">MWh 会在导入时自动 ×1000 转换为 kWh，统一单位口径。</div>
+        </div>
+
+        <!-- 建筑编号前缀 -->
+        <div class="rule-card">
+          <div class="rule-head">建筑编号前缀</div>
+          <el-input v-model="cleanRules.buildingIdPrefix" style="width: 100%"
+                    placeholder="例如 Demo（源数据无园区前缀时自动补齐）" />
+          <div class="rule-conseq">源数据建筑编号缺少园区前缀时自动补齐，避免跨园区建筑编号冲突。</div>
+        </div>
+      </div>
 
       <div class="step-actions">
         <el-button @click="step = 1">上一步</el-button>
@@ -161,25 +196,25 @@
     </div>
 
     <!-- ============ 步骤 4：预览导入 ============ -->
-    <div v-show="step === 3" class="page-card">
+    <div v-show="step === 3" class="page-card wizard-step">
       <div class="page-title">步骤四 · 预览导入（尚未写入数据库）</div>
 
       <div v-if="result" class="kpi-row">
         <div class="kpi-card">
-          <div class="kpi-label">源数据行数</div>
-          <div class="kpi-value">{{ result.totalRows }}</div>
+          <div class="kpi-label">总行数</div>
+          <div class="kpi-value">{{ result.totalRows }}<span class="kpi-unit">行</span></div>
         </div>
-        <div class="kpi-card green">
-          <div class="kpi-label">可导入</div>
-          <div class="kpi-value">{{ result.successRows }}</div>
+        <div class="kpi-card">
+          <div class="kpi-label">有效</div>
+          <div class="kpi-value ok">{{ result.successRows }}<span class="kpi-unit">行</span></div>
         </div>
-        <div class="kpi-card red">
-          <div class="kpi-label">解析失败</div>
-          <div class="kpi-value">{{ result.failedRows }}</div>
+        <div class="kpi-card risk">
+          <div class="kpi-label">失败</div>
+          <div class="kpi-value">{{ result.failedRows }}<span class="kpi-unit">行</span></div>
         </div>
-        <div class="kpi-card orange">
-          <div class="kpi-label">按规则跳过</div>
-          <div class="kpi-value">{{ result.skippedRows }}</div>
+        <div class="kpi-card risk">
+          <div class="kpi-label">待清洗</div>
+          <div class="kpi-value">{{ result.skippedRows }}<span class="kpi-unit">行</span></div>
         </div>
       </div>
 
@@ -210,6 +245,11 @@
         </el-table>
       </div>
 
+      <div v-if="loading" class="import-progress">
+        <el-progress :percentage="0" :indeterminate="true" :show-text="false" :stroke-width="3" />
+        <span class="text-dim">正在处理…（后端无阶段进度接口，仅显示进行中状态，不假装百分比）</span>
+      </div>
+
       <div class="step-actions">
         <el-button @click="step = 2">上一步</el-button>
         <el-button type="primary" :loading="loading"
@@ -220,7 +260,7 @@
     </div>
 
     <!-- ============ 步骤 5：审计留痕 ============ -->
-    <div v-show="step === 4" class="page-card">
+    <div v-show="step === 4" class="page-card wizard-step">
       <div class="page-title">步骤五 · 导入结果与审计留痕</div>
 
       <el-result v-if="result" :icon="result.status === '成功' ? 'success' : 'warning'"
@@ -298,6 +338,9 @@
         </el-descriptions-item>
         <el-descriptions-item label="清洗规则">
           <pre class="json-pre">{{ pretty(logDetail.cleanRules) }}</pre>
+        </el-descriptions-item>
+        <el-descriptions-item label="错误明细">
+          <pre class="json-pre">{{ pretty(logDetail.errorDetail) || '（无）' }}</pre>
         </el-descriptions-item>
         <el-descriptions-item label="操作人">{{ logDetail.operator }}</el-descriptions-item>
         <div class="mt-12" v-if="logDetail && logDetail.dryRun !== 1 && logDetail.dryRun !== true">
@@ -425,6 +468,34 @@ function pct(count: number) {
 function typeLabel(t: string) {
   return t === 'number' ? '数值' : t === 'datetime' ? '时间' : t === 'empty' ? '空列' : '文本'
 }
+
+/** 文件大小格式化（B/KB/MB） */
+function fmtSize(bytes?: number) {
+  if (!bytes || bytes <= 0) return '未知大小'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`
+}
+
+/** 被多个源列映射到同一目标字段的重复项 */
+const duplicateMappings = computed(() => {
+  const seen = new Set<string>()
+  const dups: string[] = []
+  for (const target of Object.values(mapping)) {
+    if (!target) continue
+    if (seen.has(target)) dups.push(target)
+    seen.add(target)
+  }
+  return [...new Set(dups)]
+})
+
+/** 必填目标字段中尚未被映射的 */
+const missingRequired = computed(() => {
+  const mapped = new Set(Object.values(mapping).filter(Boolean))
+  return targetFields.value
+    .filter((f) => f.required && !mapped.has(f.column))
+    .map((f) => f.label)
+})
 
 function fieldLabel(f: TargetField) {
   const unit = f.unit && f.unit !== '-' ? ` (${f.unit})` : ''
@@ -687,6 +758,103 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* ── 主工作区居中 ── */
+.wizard-step { max-width: 980px; margin-left: auto; margin-right: auto; }
+
+/* ── Stepper 配色：已完成薄荷绿对勾 / 当前深绿 / 未开始灰 ── */
+:deep(.el-step__head.is-process) { color: #2c755c; border-color: #2c755c; }
+:deep(.el-step__title.is-process) { color: #2c755c; font-weight: 600; }
+:deep(.el-step__head.is-success) { color: #7fb98c; border-color: #7fb98c; }
+:deep(.el-step__title.is-success) { color: #7fb98c; }
+:deep(.el-step__head.is-wait) { color: #b8c2bd; border-color: #b8c2bd; }
+:deep(.el-step__title.is-wait) { color: #b8c2bd; }
+
+/* ── 上传框醒目 ── */
+.uploader { max-width: 720px; margin: 0 auto; }
+.uploader :deep(.el-upload-dragger) {
+  border: 2px dashed #c6d9cd;
+  border-radius: 16px;
+  padding: 42px 24px;
+  background: #fafcfb;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+.uploader :deep(.el-upload-dragger:hover) {
+  border-color: #35866b;
+  background: #f2f8f5;
+}
+
+/* ── 文件信息卡 ── */
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--carbon-border, #e3e9e4);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+}
+.file-icon { font-size: 26px; color: #35866b; flex-shrink: 0; }
+.file-name { font-size: 14px; font-weight: 600; color: var(--carbon-text, #253d35); }
+.file-sub { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--carbon-text-dim, #5d6e66); margin-top: 3px; }
+.file-badge { padding: 0 6px; border-radius: 4px; background: #eef3f0; color: #2f7a61; font-size: 11px; }
+.parse-ok { display: inline-flex; align-items: center; gap: 5px; color: #2f7a61; }
+.parse-dot { width: 7px; height: 7px; border-radius: 50%; background: #4f9d77; }
+
+/* ── 清洗规则卡片 ── */
+.rule-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.rule-card {
+  padding: 16px;
+  border: 1px solid var(--carbon-border, #e3e9e4);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: var(--shadow-xs);
+}
+.rule-head { font-size: 13px; font-weight: 600; color: var(--carbon-text, #253d35); margin-bottom: 10px; }
+.rule-switch { display: flex; align-items: center; justify-content: space-between; font-size: 13px; color: var(--carbon-text-regular, #46584f); }
+.rule-conseq { margin-top: 10px; font-size: 12px; line-height: 1.7; color: var(--carbon-text-mute, #7b8b84); }
+
+/* ── 导入进度条 ── */
+.import-progress { margin-bottom: 14px; padding: 12px 14px; border-radius: 12px; background: #f6f9f7; border: 1px solid #e4ece7; }
+.import-progress .text-dim { display: block; margin-top: 6px; font-size: 12px; }
+
+/* ── KPI 语义色 ── */
+.kpi-card { border-radius: 14px; }
+.kpi-value.ok { color: #4f9d77; }
+.kpi-card.risk .kpi-value { color: #c26b62; }
+
+.page-title-row,
+.chart-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.uploader { max-width: 700px; }
+.step-actions {
+  margin-top: 18px;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.ml8 { margin-left: 8px; font-size: 12px; }
+.json-pre {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+@media (max-width: 760px) {
+  .rule-grid { grid-template-columns: 1fr; }
+}
+
 .page-title-row,
 .chart-title-row {
   display: flex;
