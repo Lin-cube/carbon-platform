@@ -25,7 +25,7 @@ public class AiToolSchema {
         tools.add(fn(
                 "getParkEnergySummary", "查询某园区在日期范围内的能耗汇总：总用电、空调能耗、碳排放、平均COP、异常小时与峰谷时段。",
                 List.of(
-                        p("siteId", "string", "园区编号，例如 Eagle"),
+                        p("siteId", "string", "园区编号；不填表示全部园区；不确定有哪些园区时先调 listSites"),
                         p("startDate", "string", "开始日期，YYYY-MM-DD"),
                         p("endDate", "string", "结束日期，YYYY-MM-DD")),
                 List.of("siteId", "startDate", "endDate")));
@@ -33,7 +33,7 @@ public class AiToolSchema {
         tools.add(fn(
                 "getBuildingEnergySummary", "查询单栋建筑在日期范围内的能耗汇总：类型、面积、评级、用电、空调、碳排、COP、异常小时。",
                 List.of(
-                        p("buildingId", "string", "建筑编号，例如 Eagle_office_Dallas"),
+                        p("buildingId", "string", "建筑编号（形如 园区_类型_名称，可用 getTopEnergyBuildings 查候选）"),
                         p("startDate", "string", "开始日期，YYYY-MM-DD"),
                         p("endDate", "string", "结束日期，YYYY-MM-DD")),
                 List.of("buildingId", "startDate", "endDate")));
@@ -84,6 +84,19 @@ public class AiToolSchema {
                 "getTopAnomalyBuildings", "查询异常持续时长最长的建筑排行（单次最长持续小时、事件数、累计异常小时），默认前 10，最多 50。",
                 List.of(
                         p("siteId", "string", "园区编号，可空表示全部园区"),
+                        p("startDate", "string", "开始日期，YYYY-MM-DD"),
+                        p("endDate", "string", "结束日期，YYYY-MM-DD"),
+                        p("limit", "integer", "返回条数，默认 10，最大 50")),
+                List.of("startDate", "endDate")));
+
+        tools.add(fn(
+                "listSites", "列出平台全部园区（含建筑数与年度用电量）。不确定有哪些园区、或用户问「有哪些园区」时先调用本工具。",
+                List.of(),
+                List.of()));
+
+        tools.add(fn(
+                "getTopSites", "查询日期范围内各园区的用电量排行（一次返回园区维度排名，勿逐个园区循环调用）。",
+                List.of(
                         p("startDate", "string", "开始日期，YYYY-MM-DD"),
                         p("endDate", "string", "结束日期，YYYY-MM-DD"),
                         p("limit", "integer", "返回条数，默认 10，最大 50")),

@@ -96,6 +96,9 @@ public class AiQueryToolService {
                     carbonEmissionSummary(str(a, "siteId"), str(a, "startDate"), str(a, "endDate"));
             case "getTopAnomalyBuildings" ->
                     topAnomalyBuildings(str(a, "siteId"), str(a, "startDate"), str(a, "endDate"), intArg(a, "limit", DEFAULT_LIMIT));
+            case "listSites" -> listSites();
+            case "getTopSites" ->
+                    topSites(str(a, "startDate"), str(a, "endDate"), intArg(a, "limit", DEFAULT_LIMIT));
             default -> throw new BizException(ResultCode.BAD_REQUEST, "未知工具: " + tool);
         };
     }
@@ -104,14 +107,17 @@ public class AiQueryToolService {
 
     /** ① 园区能耗汇总：总量 / 空调 / 碳排 / COP / 异常 / 峰谷 */
     public Map<String, Object> parkEnergySummary(String siteId, String startDate, String endDate) {
-        validateSiteId(siteId);
+        // siteId 为空表示「全部园区」
+        if (StringUtils.hasText(siteId)) {
+            validateSiteId(siteId);
+        }
         LocalDate[] r = parseRange(startDate, endDate);
-        EnergyQueryRequest req = req(r[0], r[1], siteId, null);
+        EnergyQueryRequest req = req(r[0], r[1], StringUtils.hasText(siteId) ? siteId : null, null);
         OverviewVO ov = energyQueryService.overviewStats(req);
         var peak = analyticsService.periodSummary("month", r[0], r[1], null, siteId, null);
 
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("siteId", siteId);
+        out.put("siteId", StringUtils.hasText(siteId) ? siteId : "全部园区");
         out.put("buildingCount", ov.getBuildingCount());
         out.put("electricityKwh", ov.getElectricityKwh());
         out.put("hvacKwh", ov.getHvacKwh());
@@ -273,6 +279,50 @@ public class AiQueryToolService {
         out.put("count", rows.size());
         out.put("limit", n);
         out.put("note", "按单次异常最长持续小时降序，duration 单位为小时。");
+        return out;
+    }
+
+    /** ⑨ 全部园区列表（含建筑数与年度用电），供模型知道有哪些园区可选 */
+    public Map<String, Object> listSites() {
+        List<Map<String, Object>> sites = energyQueryService.listSites();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("sites", sites);
+        out.put("count", sites == null ? 0 : sites.size());
+        out.put("note", "electricityKwhYear 为各园区年度基准用电，单位 kWh。");
+        return out;
+    }
+
+    /** ⑩ 园区用电量排行（一次调用返回园区维度排名，避免逐园区循环） */
+    public Map<String, Object> topSites(String startDate, String endDate, int limit) {
+        LocalDate[] r = parseRange(startDate, endDate);
+        int n = validateLimit(limit);
+        EnergyQueryRequest req = req(r[0], r[1], null, null);
+        req.setMetric("electricity");
+        var b = energyQueryService.breakdownStats(req, "site");
+        List<Map<String, Object>> items = new ArrayList<>();
+        if (b != null && b.getItems() != null) {
+            for (var it : b.getItems()) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("siteId", it.getKey());
+                m.put("electricityKwh", it.getValue());
+                m.put("percentage", it.getPercentage());
+                m.put("buildingCount", it.getCount());
+                items.add(m);
+            }
+            items.sort((x, y) -> {
+                BigDecimal a1 = (BigDecimal) x.get("electricityKwh");
+                BigDecimal b1 = (BigDecimal) y.get("electricityKwh");
+                return b1.compareTo(a1);
+            });
+        }
+        if (items.size() > n) {
+            items = new ArrayList<>(items.subList(0, n));
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("topSites", items);
+        out.put("count", items.size());
+        out.put("totalElectricityKwh", b == null ? null : b.getTotal());
+        out.put("unit", "electricityKwh 单位 kWh，percentage 为占全部园区比例");
         return out;
     }
 

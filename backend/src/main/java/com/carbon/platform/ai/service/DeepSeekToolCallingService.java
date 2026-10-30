@@ -44,6 +44,8 @@ import java.util.*;
 public class DeepSeekToolCallingService {
 
     private static final int MAX_ROUNDS = 3;
+    /** 单轮最多执行多少个工具调用（防止模型逐园区循环导致超时/失败） */
+    private static final int MAX_TOOL_CALLS_PER_ROUND = 10;
     private static final int MAX_HISTORY_MESSAGES = 6;
     private static final String SYSTEM_PROMPT = """
             你是「碳能智控运维平台」的 AI 助手小E。用中文简洁回答建筑能源问题。
@@ -136,7 +138,12 @@ public class DeepSeekToolCallingService {
                     // 回填 assistant 的 tool_calls 消息
                     messages.add(assistantToolCallsMessage(r));
                     // 执行工具并回填 tool 消息
+                    int executed = 0;
                     for (ToolChatResult.ToolCall tc : r.getToolCalls()) {
+                        if (++executed > MAX_TOOL_CALLS_PER_ROUND) {
+                            log.warn("单轮工具调用超上限({})，忽略后续调用", MAX_TOOL_CALLS_PER_ROUND);
+                            break;
+                        }
                         ChatResponse.ToolCall call = new ChatResponse.ToolCall();
                         call.setTool(tc.getName());
                         call.setElapsedMs(0L);
