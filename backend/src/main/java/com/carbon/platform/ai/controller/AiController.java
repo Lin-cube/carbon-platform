@@ -87,7 +87,7 @@ public class AiController {
                 : Integer.parseInt(String.valueOf(body.get("limit")));
         Map<String, Object> result = yuanbaoSearchService.search(query, limit);
         if (result == null) {
-            return R.fail(500, "联网搜索不可用：未配置 YUANBAO_SEARCH_API_KEY 或调用失败");
+            return R.fail(500, "联网搜索不可用：未配置元宝搜索凭证（YUANBAO_SECRET_ID/KEY 或 YUANBAO_SEARCH_API_KEY）或调用失败");
         }
         return R.ok(result);
     }

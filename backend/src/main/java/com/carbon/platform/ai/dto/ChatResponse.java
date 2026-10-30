@@ -47,6 +47,8 @@ public class ChatResponse {
         private String source;
         private Integer page;
         private String snippet;
+        /** 参考来源链接（联网搜索时非空，前端渲染为可点击链接） */
+        private String url;
     }
 
     @Data

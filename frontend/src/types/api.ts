@@ -196,7 +196,7 @@ export interface SuggestResult {
 export interface ChatResponse {
   ok: boolean
   answer: string
-  citations: { source: string; page: number; snippet: string }[]
+  citations: { source: string; page: number; snippet: string; url?: string }[]
   toolCalls: { tool: string; args: Record<string, unknown>; elapsedMs: number; success: boolean }[]
   dataEvidence: Record<string, unknown>
   confidence: number | null

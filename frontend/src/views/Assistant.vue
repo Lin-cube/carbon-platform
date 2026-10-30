@@ -94,8 +94,10 @@
                     </template>
                     <div v-for="(c, ci) in m.res.citations" :key="ci" class="cite-item">
                       <div class="cite-src">
-                        {{ c.source }}
-                        <span class="text-dim">· 第 {{ c.page }} 页</span>
+                        <a v-if="c.url" class="cite-link" :href="c.url"
+                           target="_blank" rel="noopener noreferrer">{{ c.source }}</a>
+                        <template v-else>{{ c.source }}</template>
+                        <span v-if="c.page != null" class="text-dim">· 第 {{ c.page }} 页</span>
                       </div>
                       <div class="cite-snippet">{{ c.snippet }}</div>
                     </div>
@@ -568,6 +570,8 @@ onMounted(async () => {
 .cite-item { padding: 6px 0; border-bottom: 1px dashed #eef1f5; }
 .cite-item:last-child { border-bottom: none; }
 .cite-src { font-size: 12px; font-weight: 600; color: #374151; }
+.cite-link { color: #35866b; text-decoration: none; word-break: break-all; }
+.cite-link:hover { text-decoration: underline; }
 .cite-snippet { font-size: 12px; color: #5d6e66; line-height: 1.7; }
 
 .footer-row {

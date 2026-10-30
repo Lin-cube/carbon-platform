@@ -2,6 +2,7 @@ package com.carbon.platform.ai.client;
 
 import com.carbon.platform.ai.dto.ChatRequest;
 import com.carbon.platform.ai.service.DeepSeekToolCallingService;
+import com.carbon.platform.ai.search.YuanbaoSearchService;
 import com.carbon.platform.ai.dto.DiagnoseRequest;
 import com.carbon.platform.ai.dto.ReportRequest;
 import com.carbon.platform.ai.dto.ChatResponse;
@@ -11,6 +12,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -52,6 +54,7 @@ public class HybridAiServiceClient implements AiServiceClient {
     private final MockAiServiceClient localEngine;
     private final HttpAiServiceClient ragEngine;
     private final DeepSeekToolCallingService toolCalling;
+    private final YuanbaoSearchService yuanbaoSearch;
 
     /** 知识类问题的特征词。命中任一即判定为知识类，路由到 RAG。 */
     private static final List<String> KNOWLEDGE_MARKERS = List.of(
@@ -94,11 +97,13 @@ public class HybridAiServiceClient implements AiServiceClient {
     public HybridAiServiceClient(
             MockAiServiceClient localEngine,
             DeepSeekToolCallingService toolCalling,
+            YuanbaoSearchService yuanbaoSearch,
             @Value("${carbon.ai.base-url:http://127.0.0.1:8000}") String baseUrl,
             @Value("${carbon.ai.connect-timeout-ms:3000}") int connectTimeout,
             @Value("${carbon.ai.read-timeout-ms:60000}") int readTimeout) {
         this.localEngine = localEngine;
         this.toolCalling = toolCalling;
+        this.yuanbaoSearch = yuanbaoSearch;
         // 手工构造而非注入：HttpAiServiceClient 带 @ConditionalOnProperty(mode=http)，
         // 在 hybrid 模式下不会被注册，但本类需要复用它。
         this.ragEngine = new HttpAiServiceClient(baseUrl, connectTimeout, readTimeout);
@@ -147,14 +152,18 @@ public class HybridAiServiceClient implements AiServiceClient {
         boolean knowledge = isKnowledge(request.getQuestion());
         if (knowledge) {
             ChatResponse r = ragEngine.chat(request);
-            // RAG 不可用或检索为空时，回退本地统计并说明原因，避免返回空答案
+            // RAG 不可用或检索为空时，回退联网搜索（元宝），再不行才回退本地统计
             if (r == null || !Boolean.TRUE.equals(r.getOk())
                     || r.getAnswer() == null || r.getAnswer().isBlank()) {
-                log.warn("知识类问题 RAG 未返回有效答案，回退本地统计引擎：{}",
-                        request.getQuestion());
+                log.warn("知识类问题 RAG 未返回有效答案，尝试联网搜索：{}", request.getQuestion());
+                ChatResponse web = webSearchFallback(request);
+                if (web != null) {
+                    return web;
+                }
+                log.warn("联网搜索不可用，回退本地统计引擎：{}", request.getQuestion());
                 ChatResponse fb = localEngine.chat(request);
                 if (fb != null && fb.getAnswer() != null) {
-                    fb.setAnswer("【知识库暂不可用，以下为系统数据分析能力可提供的内容】\n\n"
+                    fb.setAnswer("【知识库与联网搜索暂不可用，以下为系统数据分析能力可提供的内容】\n\n"
                             + fb.getAnswer());
                 }
                 return fb;
@@ -185,6 +194,54 @@ public class HybridAiServiceClient implements AiServiceClient {
             }
         }
         return local;
+    }
+
+    /** 联网搜索兜底：RAG 未覆盖时用元宝搜索，结果带可点击来源链接 */
+    private ChatResponse webSearchFallback(ChatRequest request) {
+        if (!yuanbaoSearch.available()) {
+            return null;
+        }
+        try {
+            Map<String, Object> res = yuanbaoSearch.search(request.getQuestion(), 5);
+            if (res == null) {
+                return null;
+            }
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> results = (List<Map<String, Object>>) res.get("results");
+            if (results == null || results.isEmpty()) {
+                return null;
+            }
+            ChatResponse out = new ChatResponse();
+            out.setOk(true);
+            List<ChatResponse.Citation> cites = new ArrayList<>();
+            StringBuilder sb = new StringBuilder("知识库未覆盖该问题，我通过联网搜索找到以下资料：\n");
+            int i = 0;
+            for (Map<String, Object> r : results) {
+                i++;
+                String title = String.valueOf(r.getOrDefault("title", ""));
+                String url = String.valueOf(r.getOrDefault("url", ""));
+                String snip = String.valueOf(r.getOrDefault("snippet", ""));
+                sb.append(i).append(". ").append(title).append("\n");
+                if (org.springframework.util.StringUtils.hasText(snip) && !"null".equals(snip)) {
+                    sb.append("   ").append(snip).append("\n");
+                }
+                ChatResponse.Citation c = new ChatResponse.Citation();
+                c.setSource(title);
+                c.setUrl(url);
+                c.setSnippet(snip);
+                c.setPage(null);
+                cites.add(c);
+            }
+            sb.append("\n（数据来源：腾讯元宝搜索 · 联网检索，点击来源链接可查看原文）");
+            out.setAnswer(sb.toString());
+            out.setCitations(cites);
+            out.setDataSource("联网搜索（元宝 SearchPro）");
+            out.setConfidence(0.6);
+            return out;
+        } catch (Exception e) {
+            log.warn("联网搜索兜底失败：{}", e.getMessage());
+            return null;
+        }
     }
 
     /** 从请求上下文取 siteId（前端放在 context.siteId） */
