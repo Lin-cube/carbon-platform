@@ -46,4 +46,20 @@ public interface LlmClient {
     default String chat(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
         return chat(systemPrompt, userPrompt, temperature);
     }
+
+    /**
+     * 带工具（function calling）的对话。
+     *
+     * <p>默认实现返回 null 表示「不支持工具调用」，上层据此降级。
+     * 只有 OpenAI 兼容客户端（OpenAiCompatibleLlmClient）覆盖本方法。
+     *
+     * @param messages  完整对话历史，每项含 role/content/tool_call_id/tool_calls
+     * @param tools     可调用工具定义（DeepSeek function calling 格式）
+     * @param maxTokens 输出上限
+     */
+    default ToolChatResult chatWithTools(java.util.List<java.util.Map<String, Object>> messages,
+                                          java.util.List<java.util.Map<String, Object>> tools,
+                                          int maxTokens) {
+        return null;
+    }
 }

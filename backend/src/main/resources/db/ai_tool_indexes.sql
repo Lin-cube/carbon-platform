@@ -7,3 +7,9 @@
 ALTER TABLE fact_anomaly_event ADD INDEX idx_site_start (site_id, start_ts);
 ALTER TABLE fact_anomaly_event ADD INDEX idx_start (start_ts);
 ALTER TABLE fact_anomaly_event ADD INDEX idx_duration (duration_hours);
+
+-- AI 工具调用 Token 用量记录（2026-10-30）
+ALTER TABLE ai_tool_call_log
+  ADD COLUMN prompt_tokens INT DEFAULT 0,
+  ADD COLUMN completion_tokens INT DEFAULT 0,
+  ADD COLUMN total_tokens INT DEFAULT 0;

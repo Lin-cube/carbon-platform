@@ -54,8 +54,12 @@ public class AiQueryToolService {
     private static final Pattern SITE_ID = Pattern.compile("^[A-Za-z][A-Za-z0-9_-]{0,63}$");
     private static final Pattern BUILDING_ID =
             Pattern.compile("^[A-Za-z0-9]+_[A-Za-z0-9]+_[A-Za-z0-9]+$");
-    /** 日期跨度上限（天） */
-    private static final long MAX_RANGE_DAYS = 3660;
+    /**
+     * 日期跨度上限（天）。与 EnergyQueryServiceImpl 的
+     * carbon.query.max-time-range-days（默认 366）保持一致，
+     * 超过则拒绝，避免大范围扫描影响业务系统。
+     */
+    private static final long MAX_RANGE_DAYS = 366;
     /** 排行默认条数 / 上限 */
     private static final int DEFAULT_LIMIT = 10;
     private static final int MAX_LIMIT = 50;
@@ -299,7 +303,7 @@ public class AiQueryToolService {
             throw new BizException(ResultCode.BAD_REQUEST, "开始日期不能晚于结束日期");
         }
         if (ChronoUnit.DAYS.between(s, e) > MAX_RANGE_DAYS) {
-            throw new BizException(ResultCode.BAD_REQUEST, "日期跨度不能超过 " + MAX_RANGE_DAYS + " 天");
+            throw new BizException(ResultCode.BAD_REQUEST, "查询时间跨度超过 " + MAX_RANGE_DAYS + " 天上限，请缩小范围或分段查询");
         }
         return new LocalDate[]{s, e};
     }

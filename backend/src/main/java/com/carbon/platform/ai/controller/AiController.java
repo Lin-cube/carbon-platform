@@ -2,6 +2,7 @@ package com.carbon.platform.ai.controller;
 
 import com.carbon.platform.ai.client.AiServiceClient;
 import com.carbon.platform.ai.dto.ChatRequest;
+import com.carbon.platform.ai.search.YuanbaoSearchService;
 import com.carbon.platform.ai.dto.ChatResponse;
 import com.carbon.platform.ai.dto.DiagnoseRequest;
 import com.carbon.platform.ai.dto.ReportRequest;
@@ -29,6 +30,7 @@ public class AiController {
 
     private final AiServiceClient aiServiceClient;
     private final com.carbon.platform.ai.service.DashboardInsightService dashboardInsightService;
+    private final YuanbaoSearchService yuanbaoSearchService;
 
     @Operation(summary = "自然语言问答（小E 助手）")
     @PostMapping("/chat")
@@ -74,6 +76,20 @@ public class AiController {
     @OperLog(title = "AI-工具清单", businessType = OperLog.BusinessType.QUERY)
     public R<Map<String, Object>> tools() {
         return R.ok(aiServiceClient.listTools());
+    }
+
+    @Operation(summary = "联网搜索（元宝搜索，独立于内部能源查询）")
+    @PostMapping("/search/web")
+    @OperLog(title = "AI-联网搜索", businessType = OperLog.BusinessType.QUERY)
+    public R<Map<String, Object>> webSearch(@RequestBody Map<String, Object> body) {
+        String query = body == null ? null : String.valueOf(body.get("query"));
+        int limit = body == null || body.get("limit") == null ? 5
+                : Integer.parseInt(String.valueOf(body.get("limit")));
+        Map<String, Object> result = yuanbaoSearchService.search(query, limit);
+        if (result == null) {
+            return R.fail(500, "联网搜索不可用：未配置 YUANBAO_SEARCH_API_KEY 或调用失败");
+        }
+        return R.ok(result);
     }
 
     @Operation(summary = "AI 服务健康状态（看板指示灯）")

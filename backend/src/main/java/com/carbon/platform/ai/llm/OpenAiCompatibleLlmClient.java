@@ -148,4 +148,82 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         }
         return s.length() <= 200 ? s : s.substring(0, 200) + "...";
     }
+
+    // ================================================================ 工具调用
+
+    /**
+     * 带工具的对话（DeepSeek function calling）。
+     *
+     * <p>与 {@link #chat} 的区别：
+     * <ul>
+     *   <li>请求体携带 {@code tools} + {@code tool_choice:"auto"}；</li>
+     *   <li>解析 {@code message.tool_calls} 与 {@code usage}（Token 用量）；</li>
+     *   <li>返回值是 {@link ToolChatResult}，而非纯文本。</li>
+     * </ul>
+     */
+    @Override
+    public ToolChatResult chatWithTools(java.util.List<java.util.Map<String, Object>> messages,
+                                        java.util.List<java.util.Map<String, Object>> tools,
+                                        int maxTokens) {
+        ToolChatResult result = new ToolChatResult();
+        if (!available()) {
+            return null;
+        }
+        try {
+            ObjectNode body = mapper.createObjectNode();
+            body.put("model", model);
+            body.put("temperature", 0.0);      // 工具选择与参数生成用低温，减少幻觉
+            body.put("stream", false);
+            body.put("max_tokens", Math.max(maxTokens, 64));
+            body.put("tool_choice", "auto");
+
+            ArrayNode msgs = body.putArray("messages");
+            for (java.util.Map<String, Object> m : messages) {
+                msgs.add(mapper.valueToTree(m));
+            }
+            ArrayNode toolsArr = body.putArray("tools");
+            for (java.util.Map<String, Object> t : tools) {
+                toolsArr.add(mapper.valueToTree(t));
+            }
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.setBearerAuth(apiKey);
+
+            long t0 = System.currentTimeMillis();
+            ResponseEntity<String> resp = restTemplate.exchange(
+                    baseUrl + "/chat/completions", HttpMethod.POST,
+                    new HttpEntity<>(mapper.writeValueAsString(body), headers), String.class);
+            result.setElapsedMs(System.currentTimeMillis() - t0);
+
+            JsonNode root = mapper.readTree(resp.getBody());
+            JsonNode choices = root.path("choices");
+            if (!choices.isArray() || choices.isEmpty()) {
+                log.warn("大模型返回无 choices：{}", abbreviate(resp.getBody()));
+                return null;
+            }
+            JsonNode message = choices.get(0).path("message");
+            result.setContent(message.path("content").asText(null));
+
+            JsonNode tcs = message.path("tool_calls");
+            if (tcs.isArray()) {
+                for (JsonNode tc : tcs) {
+                    ToolChatResult.ToolCall call = new ToolChatResult.ToolCall();
+                    call.setId(tc.path("id").asText(null));
+                    call.setName(tc.path("function").path("name").asText(null));
+                    call.setArguments(tc.path("function").path("arguments").asText(null));
+                    result.getToolCalls().add(call);
+                }
+            }
+
+            JsonNode usage = root.path("usage");
+            result.setPromptTokens(usage.path("prompt_tokens").asInt());
+            result.setCompletionTokens(usage.path("completion_tokens").asInt());
+            result.setTotalTokens(usage.path("total_tokens").asInt());
+            return result;
+        } catch (Exception e) {
+            log.error("大模型工具调用失败（将降级）：{}", e.getMessage());
+            return null;
+        }
+    }
 }

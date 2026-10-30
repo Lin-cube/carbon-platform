@@ -102,11 +102,20 @@ carbon:
   # 由 scripts/start-all.sh 自动加载。
   llm:
     provider: ${CARBON_LLM_PROVIDER:none}
-    api-key: ${CARBON_LLM_KEY:}
+    # DEEPSEEK_API_KEY 优先，向后兼容 CARBON_LLM_KEY
+    api-key: ${DEEPSEEK_API_KEY:${CARBON_LLM_KEY:}}
     base-url: ${CARBON_LLM_BASE:https://api.deepseek.com}
     model: ${CARBON_LLM_MODEL:deepseek-chat}
     connect-timeout-ms: 5000
     read-timeout-ms: 120000
+
+  # 腾讯元宝搜索（联网搜索，独立于内部能源查询）
+  search:
+    yuanbao:
+      api-key: ${YUANBAO_SEARCH_API_KEY:}
+      base-url: ${YUANBAO_SEARCH_BASE_URL:https://api.yuanbao.tencent.com}
+      endpoint: ${YUANBAO_SEARCH_ENDPOINT:/v1/search}
+      model: ${YUANBAO_SEARCH_MODEL:yuanbao-search}
 
   # 数据导入（五步向导）
   import:

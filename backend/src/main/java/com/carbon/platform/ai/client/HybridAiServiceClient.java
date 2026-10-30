@@ -1,6 +1,7 @@
 package com.carbon.platform.ai.client;
 
 import com.carbon.platform.ai.dto.ChatRequest;
+import com.carbon.platform.ai.service.DeepSeekToolCallingService;
 import com.carbon.platform.ai.dto.DiagnoseRequest;
 import com.carbon.platform.ai.dto.ReportRequest;
 import com.carbon.platform.ai.dto.ChatResponse;
@@ -50,6 +51,7 @@ public class HybridAiServiceClient implements AiServiceClient {
 
     private final MockAiServiceClient localEngine;
     private final HttpAiServiceClient ragEngine;
+    private final DeepSeekToolCallingService toolCalling;
 
     /** 知识类问题的特征词。命中任一即判定为知识类，路由到 RAG。 */
     private static final List<String> KNOWLEDGE_MARKERS = List.of(
@@ -91,10 +93,12 @@ public class HybridAiServiceClient implements AiServiceClient {
 
     public HybridAiServiceClient(
             MockAiServiceClient localEngine,
+            DeepSeekToolCallingService toolCalling,
             @Value("${carbon.ai.base-url:http://127.0.0.1:8000}") String baseUrl,
             @Value("${carbon.ai.connect-timeout-ms:3000}") int connectTimeout,
             @Value("${carbon.ai.read-timeout-ms:60000}") int readTimeout) {
         this.localEngine = localEngine;
+        this.toolCalling = toolCalling;
         // 手工构造而非注入：HttpAiServiceClient 带 @ConditionalOnProperty(mode=http)，
         // 在 hybrid 模式下不会被注册，但本类需要复用它。
         this.ragEngine = new HttpAiServiceClient(baseUrl, connectTimeout, readTimeout);
@@ -157,7 +161,15 @@ public class HybridAiServiceClient implements AiServiceClient {
             }
             return r;
         }
-        log.debug("数据类问题，走本地统计引擎：{}", request.getQuestion());
+        log.debug("数据类问题，优先走 DeepSeek 工具调用：{}", request.getQuestion());
+        ChatResponse tc = toolCalling.answer(
+                request.getSessionId(), request.getQuestion(),
+                siteId(request), request.getBuildingId(),
+                request.getStartDate(), request.getEndDate());
+        if (tc != null && tc.getAnswer() != null && !tc.getAnswer().isBlank()) {
+            return tc;
+        }
+        log.warn("DeepSeek 工具调用不可用，降级本地统计引擎：{}", request.getQuestion());
         ChatResponse local = localEngine.chat(request);
 
         // ★ 兜底升级：本地引擎识别不出意图时，不要直接返回"我能帮你做…"的问候，
@@ -173,6 +185,14 @@ public class HybridAiServiceClient implements AiServiceClient {
             }
         }
         return local;
+    }
+
+    /** 从请求上下文取 siteId（前端放在 context.siteId） */
+    private String siteId(ChatRequest r) {
+        if (r.getContext() != null && r.getContext().get("siteId") != null) {
+            return String.valueOf(r.getContext().get("siteId"));
+        }
+        return null;
     }
 
     /**

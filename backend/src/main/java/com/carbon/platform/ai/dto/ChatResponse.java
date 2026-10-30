@@ -37,6 +37,11 @@ public class ChatResponse {
 
     private String error;
 
+    /** Token 用量（仅 DeepSeek 工具调用路径返回，用于成本统计） */
+    private Integer promptTokens;
+    private Integer completionTokens;
+    private Integer totalTokens;
+
     @Data
     public static class Citation {
         private String source;
