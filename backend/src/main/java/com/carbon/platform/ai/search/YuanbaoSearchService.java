@@ -95,11 +95,12 @@ public class YuanbaoSearchService {
 
     /** 当前鉴权方式（standard=腾讯云标准 / bearer=服务 API KEY / none） */
     public String authMode() {
-        if (StringUtils.hasText(secretId) && StringUtils.hasText(secretKey)) {
-            return "standard";
-        }
+        // 服务 API KEY（sk-）是元宝搜索官方推荐方式，优先；SecretId/SecretKey 兜底
         if (StringUtils.hasText(bearerKey)) {
             return "bearer";
+        }
+        if (StringUtils.hasText(secretId) && StringUtils.hasText(secretKey)) {
+            return "standard";
         }
         return "none";
     }
@@ -128,6 +129,11 @@ public class YuanbaoSearchService {
 
             JsonNode root = mapper.readTree(respBody);
             List<Map<String, Object>> results = extractPages(root);
+            if (results.isEmpty() && root.path("Response").path("Error").has("Code")) {
+                JsonNode err = root.path("Response").path("Error");
+                log.warn("元宝搜索返回错误：Code={} Message={}",
+                        err.path("Code").asText(), err.path("Message").asText());
+            }
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("query", query);
             out.put("count", results.size());

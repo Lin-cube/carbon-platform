@@ -113,7 +113,7 @@ carbon:
   search:
     yuanbao:
       api-key: ${YUANBAO_SEARCH_API_KEY:}
-      base-url: ${YUANBAO_SEARCH_BASE_URL:https://api.yuanbao.tencent.com}
+      base-url: ${YUANBAO_SEARCH_BASE_URL:https://api.wsa.cloud.tencent.com}
       endpoint: ${YUANBAO_SEARCH_ENDPOINT:/v1/search}
       model: ${YUANBAO_SEARCH_MODEL:yuanbao-search}
 
