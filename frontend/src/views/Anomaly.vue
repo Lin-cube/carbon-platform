@@ -1,61 +1,94 @@
 <template>
   <div>
-    <!-- 筛选栏 -->
+    <!-- 筛选区：高频 / 高级分组 -->
     <div class="page-card mb-12">
       <div class="page-title">异常诊断</div>
-      <div class="filter-bar" style="margin-bottom: 0">
-        <span class="text-dim">时间范围</span>
-        <el-date-picker v-model="range" type="daterange" value-format="YYYY-MM-DD"
-                        start-placeholder="开始" end-placeholder="结束" style="width: 240px"
-                        @change="onRangeChange" />
 
-        <span class="text-dim">园区</span>
-        <el-select v-model="siteId" placeholder="全部园区" clearable style="width: 140px"
-                   @change="onSiteChange">
-          <el-option v-for="s in sites" :key="s.siteId" :label="`${s.siteId}（${s.buildingCount}栋）`"
-                     :value="s.siteId" />
-        </el-select>
+      <div class="filter-group">
+        <div class="filter-group-label">筛选条件</div>
+        <div class="filter-bar">
+          <span class="text-dim">时间范围</span>
+          <el-date-picker v-model="range" type="daterange" value-format="YYYY-MM-DD"
+                          start-placeholder="开始" end-placeholder="结束" style="width: 240px"
+                          @change="onRangeChange" />
 
-        <span class="text-dim">建筑</span>
-        <el-select v-model="buildingId" placeholder="全部建筑" filterable clearable style="width: 250px">
-          <el-option v-for="b in buildings" :key="b.buildingId"
-                     :label="`${b.buildingId}（${b.buildingTypeCn || '未分类'}）`" :value="b.buildingId" />
-        </el-select>
+          <span class="text-dim">园区</span>
+          <el-select v-model="siteId" placeholder="全部园区" clearable style="width: 140px"
+                     @change="onSiteChange">
+            <el-option v-for="s in sites" :key="s.siteId" :label="`${s.siteId}（${s.buildingCount}栋）`"
+                        :value="s.siteId" />
+          </el-select>
 
-        <span class="text-dim">异常类型</span>
-        <el-select v-model="anomalyType" placeholder="全部类型" clearable style="width: 140px">
-          <el-option v-for="t in typeOptions" :key="t.value" :label="t.label" :value="t.value" />
-        </el-select>
-
-        <span class="text-dim">严重度</span>
-        <el-select v-model="severity" placeholder="全部" clearable style="width: 110px">
-          <el-option label="高" value="高" />
-          <el-option label="中" value="中" />
-          <el-option label="低" value="低" />
-        </el-select>
-
-        <span class="text-dim">最短持续(h)</span>
-        <el-input-number v-model="minDuration" :min="0" :max="720" :step="1" controls-position="right"
-                         style="width: 120px" placeholder="不限" />
-
-        <el-button type="primary" :icon="Search" :loading="loading" @click="search">查询</el-button>
-        <el-button :icon="Refresh" @click="onReset">重置</el-button>
+          <span class="text-dim">建筑</span>
+          <el-select v-model="buildingId" placeholder="全部建筑" filterable clearable style="width: 250px">
+            <el-option v-for="b in buildings" :key="b.buildingId"
+                        :label="`${b.buildingId}（${b.buildingTypeCn || '未分类'}）`" :value="b.buildingId" />
+          </el-select>
+        </div>
       </div>
 
-      <div class="filter-bar mt-12" style="margin-bottom: 0">
-        <span class="text-dim">每页条数</span>
-        <el-select v-model="pageSize" style="width: 100px" @change="search">
-          <el-option :value="10" label="10" />
-          <el-option :value="20" label="20" />
-          <el-option :value="50" label="50" />
-          <el-option :value="100" label="100" />
-        </el-select>
+      <div class="filter-group">
+        <div class="filter-group-label">高级筛选</div>
+        <div class="filter-bar">
+          <span class="text-dim">异常类型</span>
+          <el-select v-model="anomalyType" placeholder="全部类型" clearable style="width: 140px">
+            <el-option v-for="t in typeOptions" :key="t.value" :label="t.label" :value="t.value" />
+          </el-select>
+
+          <span class="text-dim">严重度</span>
+          <el-select v-model="severity" placeholder="全部" clearable style="width: 110px">
+            <el-option label="高" value="高" />
+            <el-option label="中" value="中" />
+            <el-option label="低" value="低" />
+          </el-select>
+
+          <span class="text-dim">最短持续(h)</span>
+          <el-input-number v-model="minDuration" :min="0" :max="720" :step="1" controls-position="right"
+                           style="width: 120px" placeholder="不限" />
+
+          <div class="filter-actions">
+            <el-button type="primary" :icon="Search" :loading="loading" @click="search">查询</el-button>
+            <el-button :icon="Refresh" @click="onReset">重置</el-button>
+          </div>
+        </div>
         <!-- 实测：当前 2016 数据集里 severity=高 的事件数为 0，保留选项以便后续数据接入 -->
-        <span class="text-dim" style="font-size: 12px">
+        <div class="text-dim" style="font-size: 12px; margin-top: 8px">
           提示：当前数据集（2016）中「高」严重度事件为 0，选它可能查不到结果
-        </span>
+        </div>
       </div>
     </div>
+
+    <!-- 告警概览（真实接口：/analytics/anomaly，按时间·园区·建筑口径） -->
+    <div class="kpi-row">
+      <div class="kpi-card">
+        <div class="kpi-label">异常事件数</div>
+        <div class="kpi-value">{{ fmtInt(summary?.eventCount) }}<span class="kpi-unit">次</span></div>
+        <div class="kpi-sub">连续异常已聚合</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">异常小时数</div>
+        <div class="kpi-value">{{ fmtInt(summary?.anomalyHours) }}<span class="kpi-unit">h</span></div>
+        <div class="kpi-sub">仅 A 级计量建筑</div>
+      </div>
+      <div class="kpi-card risk">
+        <div class="kpi-label">能耗异常率</div>
+        <div class="kpi-value">
+          {{ summary?.anomalyRate != null ? summary.anomalyRate.toFixed(2) : '--' }}<span class="kpi-unit">%</span>
+        </div>
+        <div class="kpi-sub">异常小时 ÷ 评估小时</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">平均持续时长</div>
+        <div class="kpi-value">{{ summary?.avgDurationHours != null ? Number(summary.avgDurationHours).toFixed(1) : '--' }}<span class="kpi-unit">h</span></div>
+        <div class="kpi-sub">单次事件均值</div>
+      </div>
+      <div class="kpi-card risk">
+        <div class="kpi-label">最长持续时长</div>
+        <div class="kpi-value">{{ summary?.maxDurationHours ?? '--' }}<span class="kpi-unit">h</span></div>
+        <div class="kpi-sub">需重点核查</div>
+      </div>
+    </div>
+    <div class="summary-note text-dim">摘要按时间 · 园区 · 建筑口径统计，不随异常类型 / 严重度 / 时长筛选变化。</div>
 
     <!-- 事件列表（后端分页） -->
     <div class="page-card">
@@ -65,6 +98,13 @@
           · 点击任意行或「诊断」按钮查看归因证据链
         </span>
       </div>
+
+      <el-alert v-if="loadError" type="warning" :closable="false" show-icon class="mb-12"
+                title="事件列表加载失败">
+        <template #default>
+          <el-button link type="primary" size="small" @click="loadEvents">重试</el-button>
+        </template>
+      </el-alert>
 
       <el-table :data="events" size="small" v-loading="loading" max-height="560"
                 highlight-current-row @row-click="onRowClick">
@@ -77,9 +117,9 @@
         <el-table-column prop="anomalyType" label="异常类型" width="112" />
         <el-table-column prop="severity" label="严重度" width="94">
           <template #default="{ row }">
-            <el-tag :type="severityTag(row.severity)" size="small" effect="dark">
+            <span class="severity-badge" :class="'sev-' + severityKey(row.severity)">
               {{ row.severity || '未分级' }}
-            </el-tag>
+            </span>
           </template>
         </el-table-column>
         <el-table-column prop="peakValue" label="峰值" width="104" align="right" sortable>
@@ -90,8 +130,7 @@
         </el-table-column>
         <el-table-column prop="deviationPct" label="偏离%" width="100" align="right" sortable>
           <template #default="{ row }">
-            <span :style="{ color: (row.deviationPct ?? 0) > 100 ? '#ef4444' : undefined,
-                            fontWeight: (row.deviationPct ?? 0) > 100 ? 600 : 400 }">
+            <span :class="{ 'dev-high': (row.deviationPct ?? 0) > 100 }">
               {{ row.deviationPct ?? '--' }}
             </span>
           </template>
@@ -115,7 +154,7 @@
       <el-empty v-if="!loading && !events.length" description="没有符合条件的异常事件，可放宽严重度或时长条件" />
     </div>
 
-    <!-- 诊断抽屉 -->
+    <!-- 诊断抽屉：建筑信息 → 指标对比 → 时序证据 → 归因说明 → 优化建议 -->
     <el-drawer v-model="diagnoseVisible" size="62%" :title="`异常诊断 · ${current?.buildingId || ''}`">
       <div v-loading="diagLoading">
         <template v-if="diagnose">
@@ -124,11 +163,21 @@
               {{ diagnose.hasAnomaly ? '存在能耗异常' : '未检出明显异常' }}
             </el-tag>
             <span class="text-dim">统计区间 {{ diagnose.timeRange }}</span>
-            <span class="text-dim">建筑 {{ (diagnose.buildingIds || []).join('、') }}</span>
           </div>
 
-          <!-- 异常时段 vs 正常时段 -->
-          <div class="chart-title mt-12">异常时段 / 正常时段对比</div>
+          <!-- ① 建筑信息 -->
+          <div class="chart-title mt-12">建筑信息</div>
+          <el-descriptions :column="3" border size="small" class="mb-12">
+            <el-descriptions-item label="建筑编号">{{ current?.buildingId || '--' }}</el-descriptions-item>
+            <el-descriptions-item label="所属园区">{{ current?.siteId || '--' }}</el-descriptions-item>
+            <el-descriptions-item label="建筑类型">{{ current?.buildingTypeCn || '--' }}</el-descriptions-item>
+            <el-descriptions-item label="异常类型">{{ current?.anomalyType || '--' }}</el-descriptions-item>
+            <el-descriptions-item label="严重度">{{ current?.severity || '未分级' }}</el-descriptions-item>
+            <el-descriptions-item label="异常时段">{{ current?.startTs || '--' }} 起，持续 {{ current?.durationHours ?? '--' }}h</el-descriptions-item>
+          </el-descriptions>
+
+          <!-- ② 指标对比：异常时段 vs 正常时段 -->
+          <div class="chart-title">指标对比（异常时段 / 正常时段）</div>
           <el-table :data="diagnose.anomalyVsNormal || []" size="small" border class="mb-12">
             <el-table-column label="时段" width="110">
               <template #default="{ row }">
@@ -159,11 +208,17 @@
           </el-table>
           <div class="text-dim mb-12" style="font-size: 12px">
             说明：室外温度、人员密度、供回水温度与 COP 中，供回水温度与人员密度来自仿真/推算链路，
-            判定时需结合现场实际（申报表第 17 条：AI 输出不直接作为最终决策依据）。
+            判定时需结合现场实际（AI 输出不直接作为最终决策依据）。
           </div>
 
-          <!-- 归因证据链 -->
-          <div class="chart-title">归因分析（证据链）</div>
+          <!-- ③ 时序证据（如有） -->
+          <div class="chart-title">时序证据</div>
+          <div class="text-dim mb-12" style="font-size: 12px">
+            当前诊断接口未返回逐时 / 逐日时序证据，仅提供异常 / 正常时段聚合对比（见上表）。
+          </div>
+
+          <!-- ④ 归因说明（证据链） -->
+          <div class="chart-title">归因说明（证据链）</div>
           <el-empty v-if="!(diagnose.attributions || []).length" description="未发现明显异常归因" />
           <el-card v-for="(a, i) in diagnose.attributions || []" :key="i" shadow="never"
                    class="attr-card mb-12">
@@ -186,6 +241,25 @@
             </div>
           </el-card>
 
+          <!-- ⑤ 优化建议 -->
+          <div class="chart-title">优化建议</div>
+          <el-empty v-if="!(suggest?.suggestions || []).length" description="暂无优化建议" />
+          <el-card v-for="(s, i) in suggest?.suggestions || []" :key="i" shadow="never"
+                   class="attr-card mb-12">
+            <div class="attr-head">
+              <span class="attr-cause">{{ i + 1 }}. {{ s.title }}</span>
+              <el-tag :type="priorityTag(s.priority)" size="small" effect="dark">
+                优先级 {{ s.priority }}
+              </el-tag>
+              <el-tag v-if="s.needsManualReview" type="warning" size="small" effect="plain">
+                需人工复核
+              </el-tag>
+            </div>
+            <div class="attr-row"><span class="attr-key">依据</span><span class="attr-val">{{ s.evidence }}</span></div>
+            <div class="attr-row"><span class="attr-key">措施</span><span class="attr-val">{{ s.actions }}</span></div>
+            <div class="attr-row"><span class="attr-key">原理</span><span class="attr-val text-dim">{{ s.basis }}</span></div>
+          </el-card>
+
           <!-- 能效画像 -->
           <div class="chart-title mt-12">能效画像</div>
           <el-descriptions :column="3" border size="small">
@@ -195,13 +269,14 @@
             </el-descriptions-item>
           </el-descriptions>
 
-          <!-- AI 证据链解读：把上面的异常对比与归因串成一段可读的推理 -->
+          <!-- AI 证据链解读 -->
           <AiInsight
             ref="diagnosisInsightRef"
             class="mt-12"
             scope="diagnosis"
             title="AI 证据链解读"
             :building-id="current?.buildingId || ''"
+            :site-id="current?.siteId || ''"
             :auto="false"
           />
         </template>
@@ -209,7 +284,7 @@
       </div>
     </el-drawer>
 
-    <!-- 优化建议抽屉 -->
+    <!-- 优化建议抽屉（快捷入口，聚焦建议） -->
     <el-drawer v-model="suggestVisible" size="58%" :title="`优化建议 · ${current?.buildingId || ''}`">
       <div v-loading="sugLoading">
         <template v-if="suggest">
@@ -230,18 +305,9 @@
                 需人工复核
               </el-tag>
             </div>
-            <div class="attr-row">
-              <span class="attr-key">依据</span>
-              <span class="attr-val">{{ s.evidence }}</span>
-            </div>
-            <div class="attr-row">
-              <span class="attr-key">措施</span>
-              <span class="attr-val">{{ s.actions }}</span>
-            </div>
-            <div class="attr-row">
-              <span class="attr-key">原理</span>
-              <span class="attr-val text-dim">{{ s.basis }}</span>
-            </div>
+            <div class="attr-row"><span class="attr-key">依据</span><span class="attr-val">{{ s.evidence }}</span></div>
+            <div class="attr-row"><span class="attr-key">措施</span><span class="attr-val">{{ s.actions }}</span></div>
+            <div class="attr-row"><span class="attr-key">原理</span><span class="attr-val text-dim">{{ s.basis }}</span></div>
           </el-card>
 
           <div class="chart-title mt-12">能效画像</div>
@@ -268,17 +334,20 @@ import AiInsight from '@/components/AiInsight.vue'
 import { useAppStore } from '@/stores/app'
 import { fmtNum, fmtInt } from '@/utils/echarts'
 import type {
-  AnomalyEvent, BuildingRow, DiagnoseResult, DimensionOption, SiteRow, SuggestResult
+  AnomalyEvent, AnomalyAnalysisVO, BuildingRow, DiagnoseResult, DimensionOption, SiteRow, SuggestResult
 } from '@/types/api'
 
 const app = useAppStore()
 const route = useRoute()
 
 const loading = ref(false)
+const loadError = ref(false)
 const sites = ref<SiteRow[]>([])
 const buildings = ref<BuildingRow[]>([])
 const typeOptions = ref<DimensionOption[]>([])
 const events = ref<AnomalyEvent[]>([])
+/** 告警概览（/analytics/anomaly，按时间·园区·建筑口径） */
+const summary = ref<AnomalyAnalysisVO | null>(null)
 
 const range = ref<[string, string]>([app.startDate, app.endDate])
 const siteId = ref('')
@@ -293,7 +362,6 @@ const total = ref(0)
 const diagnoseVisible = ref(false)
 const suggestVisible = ref(false)
 const diagLoading = ref(false)
-/** AI 证据链解读组件引用：拿到诊断数据后再触发，避免用空条件请求 */
 const diagnosisInsightRef = ref<InstanceType<typeof AiInsight> | null>(null)
 const sugLoading = ref(false)
 const diagnose = ref<DiagnoseResult | null>(null)
@@ -301,13 +369,9 @@ const suggest = ref<SuggestResult | null>(null)
 const current = ref<AnomalyEvent | null>(null)
 
 // ---------------------------------------------------------------- 展示辅助
-function severityTag(v: string | null) {
-  switch (v) {
-    case '高': return 'danger' as const
-    case '中': return 'warning' as const
-    case '低': return 'info' as const
-    default: return 'info' as const
-  }
+/** 严重度 → 语义键（用于风险标签配色） */
+function severityKey(v: string | null) {
+  return v === '高' ? 'high' : v === '中' ? 'mid' : 'low'
 }
 
 function confidenceTag(v: string | null | undefined) {
@@ -332,7 +396,6 @@ function num(row: Record<string, unknown> | undefined, key: string): number | nu
   return typeof v === 'number' ? v : null
 }
 
-/** 能效画像字段中文名与单位（按后端 selectEfficiencyProfile 的字段名映射） */
 const profileMeta: { key: string; label: string; unit?: string; int?: boolean }[] = [
   { key: 'buildingTypeCn', label: '建筑类型' },
   { key: 'dataGrade', label: '数据分级' },
@@ -368,8 +431,22 @@ function profileRows(profile?: Record<string, unknown>) {
 }
 
 // ---------------------------------------------------------------- 数据加载
+async function loadSummary() {
+  try {
+    summary.value = await analyticsApi.anomaly({
+      startDate: app.startDate,
+      endDate: app.endDate,
+      siteId: siteId.value || undefined,
+      buildingId: buildingId.value || undefined
+    })
+  } catch {
+    summary.value = null
+  }
+}
+
 async function loadEvents() {
   loading.value = true
+  loadError.value = false
   try {
     const res = await analyticsApi.scanAnomalies({
       startDate: app.startDate,
@@ -382,12 +459,12 @@ async function loadEvents() {
       pageNum: pageNum.value,
       pageSize: pageSize.value
     })
-    // events 在 API 类型里是 unknown[]，按 AnomalyEvent 使用
     events.value = (res.events || []) as AnomalyEvent[]
     total.value = res.total || 0
   } catch {
     events.value = []
     total.value = 0
+    loadError.value = true
   } finally {
     loading.value = false
   }
@@ -396,6 +473,7 @@ async function loadEvents() {
 function search() {
   pageNum.value = 1
   loadEvents()
+  loadSummary()
 }
 
 function onPageChange(p: number) {
@@ -410,7 +488,6 @@ function onPageSizeChange(s: number) {
 }
 
 function onSiteChange() {
-  // 切换园区后清空建筑，防止传入不属于该园区的建筑
   buildingId.value = ''
   loadBuildings()
 }
@@ -431,6 +508,7 @@ function onReset() {
   pageSize.value = 20
   loadBuildings()
   loadEvents()
+  loadSummary()
 }
 
 async function loadBuildings() {
@@ -445,14 +523,24 @@ async function loadBuildings() {
 async function openDiagnose(row: AnomalyEvent) {
   current.value = row
   diagnose.value = null
+  suggest.value = null
   diagnoseVisible.value = true
   diagLoading.value = true
   try {
-    diagnose.value = await analyticsApi.diagnose({
-      buildingId: row.buildingId,
-      startDate: app.startDate,
-      endDate: app.endDate
-    })
+    const [diag, sug] = await Promise.all([
+      analyticsApi.diagnose({
+        buildingId: row.buildingId,
+        startDate: app.startDate,
+        endDate: app.endDate
+      }),
+      analyticsApi.suggest({
+        buildingId: row.buildingId,
+        startDate: app.startDate,
+        endDate: app.endDate
+      }).catch(() => null)
+    ])
+    diagnose.value = diag
+    suggest.value = sug
     // 诊断数据就绪后再生成 AI 证据链解读（此时条件完整）
     void diagnosisInsightRef.value?.load()
   } catch {
@@ -505,36 +593,61 @@ onMounted(async () => {
 
   await loadBuildings()
   await loadEvents()
+  await loadSummary()
 })
 </script>
 
 <style scoped>
+/* ── 筛选分组 ── */
+.filter-group { margin-bottom: 12px; }
+.filter-group-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.05em;
+  color: var(--carbon-text-dim, #5d6e66); margin-bottom: 8px;
+}
+.filter-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+/* ── 告警概览 KPI 卡 ── */
+.kpi-card {
+  background: var(--carbon-panel, #fff);
+  border: 1px solid var(--carbon-border, #e3e9e4);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+.kpi-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.kpi-card::after {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, var(--carbon-primary, #35866b), rgba(53, 134, 107, 0));
+  opacity: 0.35;
+}
+/* 风险类卡片：顶部点缀改风险红，数值用风险色 */
+.kpi-card.risk::after {
+  background: linear-gradient(90deg, #c26b62, rgba(194, 107, 98, 0));
+}
+.kpi-card.risk .kpi-value { color: #c26b62; }
+.kpi-label { font-size: 12px; color: var(--carbon-text-dim, #5d6e66); margin-bottom: 6px; display: flex; align-items: center; gap: 4px; }
+.kpi-value { font-size: 22px; font-weight: 600; color: var(--carbon-text, #253d35); line-height: 1.2; font-variant-numeric: tabular-nums; }
+.kpi-unit { font-size: 12px; font-weight: 400; color: var(--carbon-text-mute, #7b8b84); margin-left: 4px; }
+.kpi-sub { font-size: 11px; color: var(--carbon-text-mute, #7b8b84); margin-top: 5px; }
+.summary-note { font-size: 12px; margin: 4px 2px 14px; }
+
+/* ── 严重度风险标签 ── */
+.severity-badge {
+  display: inline-block; padding: 1px 9px; border-radius: 6px; font-size: 11px; font-weight: 500;
+}
+.severity-badge.sev-high { background: #f9ece9; color: #9b564e; }
+.severity-badge.sev-mid  { background: #f6eed8; color: #8a6d2f; }
+.severity-badge.sev-low  { background: #e9f1f4; color: #497286; }
+.dev-high { color: #c26b62; font-weight: 600; }
+
 .attr-card :deep(.el-card__body) { padding: 12px 14px; }
-
-.attr-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 8px;
-}
-
-.attr-cause { font-weight: 600; font-size: 13px; color: #1f2937; }
-
-.attr-row {
-  display: flex;
-  gap: 8px;
-  font-size: 12.5px;
-  line-height: 1.7;
-  margin-top: 4px;
-}
-
-.attr-key {
-  flex: 0 0 34px;
-  color: #6b7280;
-  font-weight: 600;
-}
-
+.attr-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.attr-cause { font-weight: 600; font-size: 13px; color: var(--carbon-text, #253d35); }
+.attr-row { display: flex; gap: 8px; font-size: 12.5px; line-height: 1.7; margin-top: 4px; }
+.attr-key { flex: 0 0 34px; color: var(--carbon-text-dim, #5d6e66); font-weight: 600; }
 .attr-val { flex: 1; color: #374151; word-break: break-word; }
 
 :deep(.el-pagination) { justify-content: flex-end; }
