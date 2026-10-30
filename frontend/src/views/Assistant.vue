@@ -14,7 +14,6 @@
         <el-button class="ml-auto" size="small" :icon="Delete" @click="clearChat">清空对话</el-button>
       </div>
 
-      <!-- mock 模式说明：本地联调模式，答案同样由后端真实统计计算得出 -->
       <el-alert v-if="aiMode === 'mock'" type="info" closable show-icon class="mt-12"
                 title="当前为本地联调模式（carbon.ai.mode = mock）">
         <div style="font-size: 12px; line-height: 1.8">
@@ -27,77 +26,115 @@
       </el-alert>
     </div>
 
-    <div class="page-card">
-      <!-- 可滚动消息区 -->
-      <div ref="listEl" class="chat-list">
-        <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
-          <div class="avatar" :class="m.role">
-            <el-icon v-if="m.role === 'user'"><User /></el-icon>
-            <el-icon v-else><MagicStick /></el-icon>
-          </div>
+    <div class="page-card chat-card">
+      <!-- ══════════ 空对话欢迎页 ══════════ -->
+      <div v-if="messages.length === 0" class="welcome">
+        <div class="welcome-logo">
+          <el-icon :size="34"><MagicStick /></el-icon>
+        </div>
+        <h1 class="welcome-title">你好，我是小E</h1>
+        <p class="welcome-sub">你的建筑能源智能分析助手</p>
 
-          <div class="bubble" :class="[m.role, { failed: !!m.error }]">
-            <!-- 用户消息 / 纯文本 -->
-            <div class="bubble-text">{{ m.text }}</div>
-
-            <!-- 助手结构化信息 -->
-            <template v-if="m.res">
-              <div v-if="m.res.toolCalls?.length" class="meta-row">
-                <span class="meta-label">调用工具</span>
-                <el-tag v-for="(t, ti) in m.res.toolCalls" :key="ti" size="small" effect="plain"
-                        :type="t.success ? 'success' : 'danger'" class="tool-tag">
-                  {{ t.tool }}
-                </el-tag>
-              </div>
-
-              <el-collapse v-if="hasEvidence(m.res)" class="meta-collapse">
-                <el-collapse-item name="ev">
-                  <template #title>
-                    <span class="meta-label">数据证据（{{ evidenceRows(m.res).length }} 项）</span>
-                  </template>
-                  <div v-for="e in evidenceRows(m.res)" :key="e.key" class="kv-row">
-                    <span class="kv-key mono">{{ e.key }}</span>
-                    <span class="kv-val mono">{{ e.value }}</span>
-                  </div>
-                </el-collapse-item>
-              </el-collapse>
-
-              <el-collapse v-if="m.res.citations?.length" class="meta-collapse">
-                <el-collapse-item name="cite">
-                  <template #title>
-                    <span class="meta-label">知识库引用（{{ m.res.citations.length }} 条）</span>
-                  </template>
-                  <div v-for="(c, ci) in m.res.citations" :key="ci" class="cite-item">
-                    <div class="cite-src">
-                      {{ c.source }}
-                      <span class="text-dim">· 第 {{ c.page }} 页</span>
-                    </div>
-                    <div class="cite-snippet">{{ c.snippet }}</div>
-                  </div>
-                </el-collapse-item>
-              </el-collapse>
-
-              <div class="footer-row">
-                <span v-if="m.res.confidence != null">
-                  置信度 <b>{{ fmtConfidence(m.res.confidence) }}</b>
-                </span>
-                <span v-if="m.res.elapsedMs != null">耗时 <b>{{ m.res.elapsedMs }}</b> ms</span>
-                <span v-if="m.res.dataSource">数据来源 <b>{{ m.res.dataSource }}</b></span>
-                <span class="text-dim">会话 {{ sessionId.slice(0, 8) }}</span>
-              </div>
-            </template>
-          </div>
+        <div class="cap-grid">
+          <button v-for="c in capabilities" :key="c.label" type="button" class="cap-card"
+                  @click="askExample(c.q)">
+            <span class="cap-icon"><el-icon :size="20"><component :is="c.icon" /></el-icon></span>
+            <span class="cap-label">{{ c.label }}</span>
+            <span class="cap-desc">{{ c.desc }}</span>
+          </button>
         </div>
       </div>
 
-      <!-- 示例问题 -->
-      <div class="examples">
-        <span class="text-dim" style="font-size: 12px">示例问题</span>
-        <el-tag v-for="(q, i) in examples" :key="i" class="example-tag" effect="plain"
-                @click="pickExample(q)">
-          {{ q }}
-        </el-tag>
-      </div>
+      <!-- ══════════ 对话区 ══════════ -->
+      <template v-else>
+        <div ref="listEl" class="chat-list">
+          <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
+            <div class="avatar" :class="m.role">
+              <el-icon v-if="m.role === 'user'"><User /></el-icon>
+              <el-icon v-else><MagicStick /></el-icon>
+            </div>
+
+            <div class="bubble" :class="[m.role, { failed: !!m.error }]">
+              <!-- 用户 / 助手文本（纯文本，保留换行） -->
+              <div class="bubble-text">{{ m.text }}</div>
+
+              <!-- 助手结构化信息 -->
+              <template v-if="m.res">
+                <!-- 工具执行状态卡 -->
+                <div v-if="m.res.toolCalls?.length" class="tool-card">
+                  <div class="meta-label">执行工具</div>
+                  <div v-for="(t, ti) in m.res.toolCalls" :key="ti" class="tool-row">
+                    <span class="tool-dot" :class="t.success === false ? 'fail' : 'ok'"></span>
+                    <span class="tool-name mono">{{ t.tool }}</span>
+                    <span class="tool-status" :class="t.success === false ? 'fail' : 'ok'">
+                      {{ t.success === false ? '失败' : '成功' }}
+                    </span>
+                    <span v-if="t.elapsedMs != null" class="tool-ms">{{ t.elapsedMs }}ms</span>
+                  </div>
+                </div>
+
+                <!-- 数据证据卡 -->
+                <el-collapse v-if="hasEvidence(m.res)" class="meta-collapse">
+                  <el-collapse-item name="ev">
+                    <template #title>
+                      <span class="meta-label">数据证据（{{ evidenceRows(m.res).length }} 项）</span>
+                    </template>
+                    <div v-for="e in evidenceRows(m.res)" :key="e.key" class="kv-row">
+                      <span class="kv-key mono">{{ e.key }}</span>
+                      <span class="kv-val mono">{{ e.value }}</span>
+                    </div>
+                  </el-collapse-item>
+                </el-collapse>
+
+                <!-- 知识库引用 -->
+                <el-collapse v-if="m.res.citations?.length" class="meta-collapse">
+                  <el-collapse-item name="cite">
+                    <template #title>
+                      <span class="meta-label">知识库引用（{{ m.res.citations.length }} 条）</span>
+                    </template>
+                    <div v-for="(c, ci) in m.res.citations" :key="ci" class="cite-item">
+                      <div class="cite-src">
+                        {{ c.source }}
+                        <span class="text-dim">· 第 {{ c.page }} 页</span>
+                      </div>
+                      <div class="cite-snippet">{{ c.snippet }}</div>
+                    </div>
+                  </el-collapse-item>
+                </el-collapse>
+
+                <div class="footer-row">
+                  <span v-if="m.res.confidence != null">
+                    置信度 <b>{{ fmtConfidence(m.res.confidence) }}</b>
+                  </span>
+                  <span v-if="m.res.elapsedMs != null">耗时 <b>{{ m.res.elapsedMs }}</b> ms</span>
+                  <span v-if="m.res.dataSource">数据来源 <b>{{ m.res.dataSource }}</b></span>
+                  <span class="text-dim">会话 {{ sessionId.slice(0, 8) }}</span>
+                </div>
+              </template>
+
+              <!-- 失败重试 -->
+              <div v-if="m.error" class="retry-row">
+                <el-button link type="primary" size="small" @click="retryLast">重试</el-button>
+              </div>
+
+              <!-- 复制（仅助手消息） -->
+              <button v-if="m.role === 'assistant'" class="copy-btn" type="button"
+                      :title="'复制回答'" @click="copyText(m.text)">
+                <el-icon :size="13"><DocumentCopy /></el-icon>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 示例问题（对话开始后显示） -->
+        <div class="examples">
+          <span class="text-dim" style="font-size: 12px">示例问题</span>
+          <el-tag v-for="(q, i) in examples" :key="i" class="example-tag" effect="plain"
+                  @click="pickExample(q)">
+            {{ q }}
+          </el-tag>
+        </div>
+      </template>
 
       <!-- 上下文选择 + 输入区 -->
       <div class="context-bar">
@@ -105,15 +142,26 @@
         <el-select v-model="ctxBuildingId" placeholder="不限建筑" filterable clearable
                    style="width: 240px" size="small">
           <el-option v-for="b in buildings" :key="b.buildingId"
-                     :label="`${b.buildingId}（${b.buildingTypeCn || '未分类'}）`" :value="b.buildingId" />
+                      :label="`${b.buildingId}（${b.buildingTypeCn || '未分类'}）`" :value="b.buildingId" />
         </el-select>
         <el-date-picker v-model="ctxRange" type="daterange" value-format="YYYY-MM-DD" size="small"
                         start-placeholder="开始" end-placeholder="结束" style="width: 230px" />
-        <span class="text-dim" style="font-size: 12px">
-          不选则由后端按问题文本自动解析时间与建筑
+        <span v-if="!ctxBuildingId && !ctxRange" class="text-dim" style="font-size: 12px">
+          不选则由后端按问题文本自动解析
         </span>
       </div>
 
+      <!-- 当前上下文小标签 -->
+      <div v-if="ctxBuildingId || ctxRange" class="ctx-tags">
+        <el-tag v-if="ctxBuildingId" size="small" closable @close="ctxBuildingId = ''">
+          🏢 {{ ctxBuildingId }}
+        </el-tag>
+        <el-tag v-if="ctxRange" size="small" closable @close="ctxRange = null">
+          📅 {{ ctxRange[0] }} ~ {{ ctxRange[1] }}
+        </el-tag>
+      </div>
+
+      <!-- 输入框：浅色玻璃卡片，固定于对话区底部 -->
       <div class="input-bar">
         <el-input v-model="question" type="textarea" :rows="2" resize="none"
                   placeholder="用中文提问，例如：2016年有哪些能耗异常？（Enter 发送，Shift+Enter 换行）"
@@ -130,7 +178,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Delete, Promotion } from '@element-plus/icons-vue'
+import { Delete, Promotion, DocumentCopy } from '@element-plus/icons-vue'
 import { aiApi, energyApi } from '@/api'
 import { useAppStore } from '@/stores/app'
 import type { BuildingRow, ChatResponse } from '@/types/api'
@@ -149,19 +197,16 @@ const question = ref('')
 const sending = ref(false)
 const listEl = ref<HTMLDivElement>()
 const buildings = ref<BuildingRow[]>([])
+/** 上一次提问（用于失败重试） */
+const lastQuestion = ref('')
 
 const aiStatus = ref<'loading' | 'up' | 'down'>('loading')
 const aiMode = ref('')
 const healthMessage = ref('正在检测 AI 服务…')
 
-// 上下文（可选）
 const ctxBuildingId = ref('')
 const ctxRange = ref<[string, string] | null>([app.startDate, app.endDate])
 
-/**
- * 会话 ID：每次页面加载生成一次，随每次提问发送，
- * 后端用它串联多轮上下文（本地 mock 模式下仅做日志与链路标识）。
- */
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
     const r = (Math.random() * 16) | 0
@@ -179,6 +224,14 @@ const examples = [
   '2016年各园区的碳排放对比情况'
 ]
 
+/** 欢迎页四张能力卡片 */
+const capabilities = [
+  { label: '能耗查询', icon: 'Search', desc: '按园区/时段汇总用电与碳排', q: '统计Eagle园区2016下半年的用电情况' },
+  { label: 'COP 分析', icon: 'Odometer', desc: '机组能效与供回水温差', q: 'Hog_office_Sydney 的机组能效如何？' },
+  { label: '异常诊断', icon: 'Warning', desc: '扫描异常事件与证据链', q: '2016年有哪些能耗异常？' },
+  { label: '节能建议', icon: 'TrendCharts', desc: '数据驱动的优化措施', q: 'Hog_office_Sydney 有哪些可落地的优化建议？' }
+]
+
 const statusText = computed(() => ({
   loading: 'AI 服务检测中…',
   up: 'AI 服务可用',
@@ -188,7 +241,6 @@ const statusText = computed(() => ({
 const canSend = computed(() => !!question.value.trim() && !sending.value)
 
 // ---------------------------------------------------------------- 展示辅助
-/** dataEvidence 是后端返回的键值对，统一转成可读文本渲染 */
 function evidenceRows(res?: ChatResponse) {
   const ev = res?.dataEvidence || {}
   return Object.entries(ev).map(([key, value]) => ({
@@ -203,7 +255,6 @@ function hasEvidence(res?: ChatResponse) {
   return evidenceRows(res).length > 0
 }
 
-/** 置信度后端以 0~1 小数返回，展示为百分比更直观 */
 function fmtConfidence(v: number) {
   return v <= 1 ? `${(v * 100).toFixed(0)}%` : `${v}%`
 }
@@ -221,25 +272,37 @@ function push(item: ChatItem) {
 
 function pickExample(q: string) {
   question.value = q
-  // 问题里若显式提到某栋建筑，顺手把上下文建筑也选中，避免答非所问
   const hit = buildings.value.find((b) => q.includes(b.buildingId))
   if (hit) ctxBuildingId.value = hit.buildingId
+}
+
+/** 能力卡片：沿用示例问题交互（填充 + 设置上下文）后立即发送 */
+function askExample(q: string) {
+  pickExample(q)
+  send()
 }
 
 function clearChat() {
   messages.value = []
   sessionId.value = uuid()
   question.value = ''
-  greet()
+  lastQuestion.value = ''
 }
 
-function greet() {
-  push({
-    role: 'assistant',
-    text: '你好，我是小E（建筑能源智能助手）。我可以查询能耗数据、做时段汇总与 COP 计算、'
-      + '扫描异常事件、诊断问题并给出优化建议。\n'
-      + '建议在下方选择建筑与时间范围后提问，答案会更精准。'
-  })
+/** 失败重试：重发上一次提问 */
+function retryLast() {
+  if (!lastQuestion.value) return
+  question.value = lastQuestion.value
+  send()
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动复制')
+  }
 }
 
 // ---------------------------------------------------------------- 数据加载
@@ -261,6 +324,7 @@ async function send() {
   if (!q || sending.value) return
 
   push({ role: 'user', text: q })
+  lastQuestion.value = q
   question.value = ''
   sending.value = true
   try {
@@ -283,7 +347,6 @@ async function send() {
       ElMessage.warning('本次提问返回失败状态')
     }
   } catch {
-    // 拦截器已弹出错误提示，这里只补一条对话内的失败气泡
     push({ role: 'assistant', text: '请求失败：后端未能返回结果，请检查服务状态或稍后重试。', error: 'failed' })
   } finally {
     sending.value = false
@@ -292,7 +355,6 @@ async function send() {
 }
 
 onMounted(async () => {
-  greet()
   try {
     buildings.value = await energyApi.buildings({ limit: 500 })
   } catch {
@@ -315,22 +377,100 @@ onMounted(async () => {
   color: #6b7280;
 }
 .status-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; }
-.status-pill.up { background: #dcfce7; color: #15803d; }
-.status-pill.up .dot { background: #22c55e; }
-.status-pill.down { background: #fee2e2; color: #b91c1c; }
-.status-pill.down .dot { background: #ef4444; }
+.status-pill.up { background: #e4f2ea; color: #2f7a61; }
+.status-pill.up .dot { background: #4f9d77; }
+.status-pill.down { background: #f9ece9; color: #9b564e; }
+.status-pill.down .dot { background: #c26b62; }
 .ml-auto { margin-left: auto; }
 
-.chat-list {
-  height: calc(100vh - 400px);
-  min-height: 320px;
-  overflow-y: auto;
-  padding: 4px 6px 8px;
-  background: #fafbfd;
-  border-radius: 6px;
+/* ══════════ 欢迎页 ══════════ */
+.welcome {
+  text-align: center;
+  padding: 40px 16px 28px;
+}
+.welcome-logo {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 16px;
+  border-radius: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: linear-gradient(135deg, #35866b, #5b8fa8);
+  box-shadow: 0 10px 26px -12px rgba(53, 134, 107, 0.5);
+}
+.welcome-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--carbon-text, #253d35);
+}
+.welcome-sub {
+  margin: 8px 0 26px;
+  font-size: 14px;
+  color: var(--carbon-text-dim, #5d6e66);
 }
 
-.msg { display: flex; gap: 10px; margin-bottom: 14px; }
+.cap-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.cap-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 18px 12px;
+  border: 1px solid var(--carbon-border, #e3e9e4);
+  border-radius: 14px;
+  background: #ffffff;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+.cap-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: rgba(53, 134, 107, 0.4);
+}
+.cap-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--carbon-primary-soft, #ebf3f0);
+  color: var(--carbon-primary, #35866b);
+}
+.cap-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--carbon-text, #253d35);
+}
+.cap-desc {
+  font-size: 11.5px;
+  color: var(--carbon-text-mute, #7b8b84);
+  line-height: 1.5;
+}
+
+/* ══════════ 聊天区 ══════════ */
+.chat-list {
+  height: calc(100vh - 420px);
+  min-height: 320px;
+  overflow-y: auto;
+  padding: 6px 4px 12px;
+  max-width: 820px;
+  margin: 0 auto;
+  background: #fafbfd;
+  border-radius: 10px;
+}
+
+.msg { display: flex; gap: 10px; margin-bottom: 14px; max-width: 820px; margin-left: auto; margin-right: auto; }
 .msg.user { flex-direction: row-reverse; }
 
 .avatar {
@@ -344,42 +484,91 @@ onMounted(async () => {
   color: #fff;
   font-size: 15px;
 }
-.avatar.assistant { background: #2f7dff; }
-.avatar.user { background: #10b981; }
+.avatar.assistant { background: #35866b; }
+.avatar.user { background: #2a9d8f; }
 
 .bubble {
+  position: relative;
   max-width: 78%;
   padding: 10px 14px;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 13.5px;
   line-height: 1.75;
   background: #fff;
-  border: 1px solid #e5e7eb;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  border: 1px solid var(--carbon-border, #e3e9e4);
+  box-shadow: 0 1px 2px rgba(37, 61, 53, 0.04);
 }
-.bubble.user { background: #2f7dff; border-color: #2f7dff; color: #fff; }
-.bubble.failed { border-color: #fca5a5; background: #fef2f2; }
+/* 用户消息：淡绿底 */
+.bubble.user {
+  background: #e6f4ec;
+  border-color: #cde7d8;
+  color: #2f5d4a;
+}
+.bubble.failed { border-color: #e7c4c0; background: #fbf0ee; }
 
-/* 保留后端回答里的换行，不合并成一段 */
 .bubble-text { white-space: pre-wrap; word-break: break-word; }
 
+/* 复制按钮 */
+.copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--carbon-text-mute, #7b8b84);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.16s ease, background 0.16s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.bubble:hover .copy-btn { opacity: 1; }
+.copy-btn:hover { background: var(--carbon-primary-soft, #ebf3f0); color: var(--carbon-primary, #35866b); }
+
+/* 工具执行状态卡 */
+.tool-card {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: #f6f9f7;
+  border: 1px solid #e4ece7;
+}
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.tool-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.tool-dot.ok { background: #4f9d77; }
+.tool-dot.fail { background: #c26b62; }
+.tool-name { font-weight: 600; color: #253d35; }
+.tool-status.ok { color: #2f7a61; }
+.tool-status.fail { color: #9b564e; }
+.tool-ms { color: #7b8b84; }
+
 .meta-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
-.meta-label { font-size: 12px; color: #6b7280; font-weight: 600; }
+.meta-label { font-size: 12px; color: #5d6e66; font-weight: 600; }
 .tool-tag { font-family: ui-monospace, Menlo, Consolas, monospace; }
 
-.meta-collapse { margin-top: 6px; border-top: 1px dashed #e5e7eb; }
-.meta-collapse :deep(.el-collapse-item__header) { height: 32px; line-height: 32px; border-bottom: none; }
-.meta-collapse :deep(.el-collapse-item__wrap) { border-bottom: none; }
+.meta-collapse { margin-top: 6px; border-top: 1px dashed var(--carbon-border, #e3e9e4); }
+.meta-collapse :deep(.el-collapse-item__header) { height: 32px; line-height: 32px; border-bottom: none; background: transparent; }
+.meta-collapse :deep(.el-collapse-item__wrap) { border-bottom: none; background: transparent; }
 .meta-collapse :deep(.el-collapse-item__content) { padding-bottom: 6px; }
 
 .kv-row { display: flex; gap: 10px; font-size: 12px; line-height: 1.8; }
-.kv-key { flex: 0 0 150px; color: #6b7280; }
-.kv-val { flex: 1; color: #111827; word-break: break-all; }
+.kv-key { flex: 0 0 150px; color: #5d6e66; }
+.kv-val { flex: 1; color: #253d35; word-break: break-all; }
 
 .cite-item { padding: 6px 0; border-bottom: 1px dashed #eef1f5; }
 .cite-item:last-child { border-bottom: none; }
 .cite-src { font-size: 12px; font-weight: 600; color: #374151; }
-.cite-snippet { font-size: 12px; color: #6b7280; line-height: 1.7; }
+.cite-snippet { font-size: 12px; color: #5d6e66; line-height: 1.7; }
 
 .footer-row {
   display: flex;
@@ -387,17 +576,75 @@ onMounted(async () => {
   flex-wrap: wrap;
   margin-top: 10px;
   padding-top: 8px;
-  border-top: 1px dashed #e5e7eb;
+  border-top: 1px dashed var(--carbon-border, #e3e9e4);
   font-size: 11.5px;
-  color: #6b7280;
+  color: #5d6e66;
+}
+.retry-row { margin-top: 8px; }
+
+.examples {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  max-width: 820px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.example-tag { cursor: pointer; }
+.example-tag:hover { color: #35866b; border-color: #35866b; }
+
+.context-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  max-width: 820px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
-.examples { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-.example-tag { cursor: pointer; }
-.example-tag:hover { color: #2f7dff; border-color: #2f7dff; }
+.ctx-tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  max-width: 820px;
+  margin-left: auto;
+  margin-right: auto;
+}
 
-.context-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
-
-.input-bar { display: flex; gap: 10px; align-items: flex-end; margin-top: 10px; }
+/* 输入框：浅色玻璃卡片 */
+.input-bar {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid var(--carbon-border, #e3e9e4);
+  box-shadow: 0 8px 24px -14px rgba(37, 61, 53, 0.28);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  max-width: 820px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.input-bar :deep(.el-textarea__inner) {
+  max-height: 120px;
+  overflow-y: auto;
+  background: transparent;
+  box-shadow: none;
+}
 .send-btn { height: 54px; width: 96px; }
+
+@media (max-width: 900px) {
+  .cap-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cap-card, .copy-btn { transition: none; }
+}
 </style>
