@@ -222,18 +222,60 @@ public class YuanbaoSearchService {
             return results;
         }
         for (JsonNode p : pages) {
+            // 元宝返回的 Pages 元素是「JSON 字符串」，需先反序列化成对象
+            JsonNode page = p;
+            if (p.isTextual()) {
+                try {
+                    page = mapper.readTree(p.asText());
+                } catch (Exception ignore) {
+                    continue;
+                }
+            }
+            String title = firstText(page, "title", "Title");
+            String url = firstText(page, "url", "Url", "link");
+            String passage = firstText(page, "passage", "content", "snippet", "Snippet");
+            if (title.isEmpty() && url.isEmpty()) {
+                continue;
+            }
             Map<String, Object> r = new LinkedHashMap<>();
-            r.put("title", p.path("title").asText(p.path("Title").asText("")));
-            r.put("url", p.path("url").asText(p.path("Url").asText(p.path("link").asText(""))));
-            r.put("snippet", p.path("passage").asText(p.path("content").asText(p.path("snippet").asText(""))));
-            r.put("date", p.path("date").asText(p.path("Date").asText("")));
-            r.put("site", p.path("site").asText(p.path("Site").asText("")));
-            if (p.has("score") || p.has("Score")) {
-                r.put("score", p.path("score").asText(p.path("Score").asText("")));
+            r.put("title", title);
+            r.put("url", url);
+            // 摘要截断，避免把整篇正文塞进上下文/前端
+            r.put("snippet", passage.length() > 260 ? passage.substring(0, 260) + "…" : passage);
+            r.put("date", firstText(page, "date", "Date"));
+            r.put("site", hostOf(url));
+            if (page.has("score") || page.has("Score")) {
+                r.put("score", page.path("score").asText(page.path("Score").asText("")));
             }
             results.add(r);
         }
         return results;
+    }
+
+    /** 依次尝试多个字段取文本 */
+    private String firstText(JsonNode node, String... keys) {
+        for (String k : keys) {
+            if (node.hasNonNull(k)) {
+                String v = node.path(k).asText("");
+                if (!v.isBlank()) {
+                    return v;
+                }
+            }
+        }
+        return "";
+    }
+
+    /** 从 URL 提取站点域名，便于展示来源 */
+    private String hostOf(String url) {
+        if (url == null || url.isBlank()) {
+            return "";
+        }
+        try {
+            java.net.URI uri = java.net.URI.create(url);
+            return uri.getHost() == null ? "" : uri.getHost();
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     // ================================================================ 签名工具

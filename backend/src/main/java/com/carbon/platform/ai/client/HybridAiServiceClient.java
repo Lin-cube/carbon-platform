@@ -152,9 +152,8 @@ public class HybridAiServiceClient implements AiServiceClient {
         boolean knowledge = isKnowledge(request.getQuestion());
         if (knowledge) {
             ChatResponse r = ragEngine.chat(request);
-            // RAG 不可用或检索为空时，回退联网搜索（元宝），再不行才回退本地统计
-            if (r == null || !Boolean.TRUE.equals(r.getOk())
-                    || r.getAnswer() == null || r.getAnswer().isBlank()) {
+            // RAG 不可用、检索为空，或明确拒答（「知识库中未找到」）时，回退联网搜索
+            if (isRagMiss(r)) {
                 log.warn("知识类问题 RAG 未返回有效答案，尝试联网搜索：{}", request.getQuestion());
                 ChatResponse web = webSearchFallback(request);
                 if (web != null) {
@@ -194,6 +193,17 @@ public class HybridAiServiceClient implements AiServiceClient {
             }
         }
         return local;
+    }
+
+    /** 判断 RAG 是否未命中（含拒答话术），命中则不应直接返回 */
+    private boolean isRagMiss(ChatResponse r) {
+        if (r == null || !Boolean.TRUE.equals(r.getOk())
+                || r.getAnswer() == null || r.getAnswer().isBlank()) {
+            return true;
+        }
+        String a = r.getAnswer();
+        return a.contains("知识库中未找到") || a.contains("未找到与该问题相关")
+                || a.contains("不做回答") || a.contains("语料尚未收录");
     }
 
     /** 联网搜索兜底：RAG 未覆盖时用元宝搜索，结果带可点击来源链接 */

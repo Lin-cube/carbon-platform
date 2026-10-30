@@ -5,6 +5,7 @@ import com.carbon.platform.ai.llm.LlmClient;
 import com.carbon.platform.ai.llm.ToolChatResult;
 import com.carbon.platform.ai.tool.AiQueryToolService;
 import com.carbon.platform.ai.tool.AiToolSchema;
+import com.carbon.platform.ai.search.YuanbaoSearchService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -47,6 +48,9 @@ public class DeepSeekToolCallingService {
     private static final String SYSTEM_PROMPT = """
             你是「碳能智控运维平台」的 AI 助手小E。用中文简洁回答建筑能源问题。
             当用户询问实际用电量、COP、碳排放、异常事件、排名或趋势时，必须调用工具查询真实数据库，不得凭空编造任何数值。
+            当用户询问运维建议、行业最佳实践、政策法规、标准规范、技术原理等通用知识时，必须调用 webSearch 联网搜索获取真实资料，
+            并在回答中给出可点击的来源链接，不要凭空作答。
+            只有问题缺少关键信息且无法合理推断时，才反问澄清；能合理推断的对象不要反复追问。
             回答要包含园区/建筑名称、统计时间、单位和数据来源。工具无结果时明确说明「无数据」，不得编造。
             禁止输出未经数据验证的节能百分比。回答控制在 300 字以内。""";
 
@@ -54,6 +58,7 @@ public class DeepSeekToolCallingService {
     private final AiQueryToolService toolService;
     private final AiToolSchema toolSchema;
     private final AiToolUsageRecorder usageRecorder;
+    private final YuanbaoSearchService yuanbaoSearch;
     private final ObjectMapper mapper = new ObjectMapper();
 
     /** 会话历史（sessionId → 最近消息），仅内存、按会话裁剪，不落库不增长无界 */
@@ -109,6 +114,7 @@ public class DeepSeekToolCallingService {
         messages.add(msg("user", q.toString(), null, null));
 
         List<ChatResponse.ToolCall> allCalls = new ArrayList<>();
+        List<ChatResponse.Citation> webCitations = new ArrayList<>();
         Map<String, Object> evidence = new LinkedHashMap<>();
         int promptTokens = 0, completionTokens = 0, totalTokens = 0;
         String finalAnswer = null;
@@ -140,7 +146,15 @@ public class DeepSeekToolCallingService {
                         try {
                             args = parseArgs(tc.getArguments());
                             call.setArgs(args);
-                            Map<String, Object> out = toolService.call(tc.getName(), args);
+                            Map<String, Object> out;
+                            if ("webSearch".equals(tc.getName())) {
+                                // 联网搜索：服务层独立，不经 AiQueryToolService（不碰数据库）
+                                out = yuanbaoSearch.search(String.valueOf(args.getOrDefault("query", "")),
+                                        intArg(args, "limit", 5));
+                                collectWebCitations(out, webCitations);
+                            } else {
+                                out = toolService.call(tc.getName(), args);
+                            }
                             result = mapper.writeValueAsString(out);
                             if (out != null && !out.isEmpty()) {
                                 evidence.put(tc.getName(), out);
@@ -179,6 +193,9 @@ public class DeepSeekToolCallingService {
         resp.setDataEvidence(evidence);
         resp.setConfidence(evidence.isEmpty() ? 0.5 : 0.9);
         resp.setElapsedMs(System.currentTimeMillis() - t0);
+        if (!webCitations.isEmpty()) {
+            resp.setCitations(webCitations);
+        }
         resp.setDataSource(evidence.isEmpty() ? "无工具调用" : "数据库工具（预聚合统计）");
         resp.setPromptTokens(promptTokens);
         resp.setCompletionTokens(completionTokens);
@@ -271,6 +288,51 @@ public class DeepSeekToolCallingService {
 
     private int nz(Integer i) {
         return i == null ? 0 : i;
+    }
+
+    /** 把联网搜索结果转成可点击的引用（前端渲染为链接） */
+    @SuppressWarnings("unchecked")
+    private void collectWebCitations(Map<String, Object> out, List<ChatResponse.Citation> target) {
+        if (out == null) {
+            return;
+        }
+        Object raw = out.get("results");
+        if (!(raw instanceof List<?> list) || list.isEmpty()) {
+            return;
+        }
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (ChatResponse.Citation existing : target) {
+            seen.add(existing.getUrl());
+        }
+        for (Object o : list) {
+            if (!(o instanceof Map)) {
+                continue;
+            }
+            Map<String, Object> m = (Map<String, Object>) o;
+            String url = String.valueOf(m.getOrDefault("url", ""));
+            String title = String.valueOf(m.getOrDefault("title", ""));
+            String snippet = String.valueOf(m.getOrDefault("snippet", ""));
+            if (url.isBlank() || "null".equals(url) || !seen.add(url)) {
+                continue;   // 去重：同一 URL 只保留一次
+            }
+            ChatResponse.Citation c = new ChatResponse.Citation();
+            c.setSource(title);
+            c.setUrl(url);
+            c.setSnippet(snippet);
+            target.add(c);
+        }
+    }
+
+    private int intArg(Map<String, Object> m, String key, int def) {
+        Object v = m.get(key);
+        if (v instanceof Number n) {
+            return n.intValue();
+        }
+        try {
+            return v == null ? def : Integer.parseInt(String.valueOf(v));
+        } catch (Exception e) {
+            return def;
+        }
     }
 
     /** 估算工具结果行数：取结果里第一个 list 的长度，否则按 1 计 */
