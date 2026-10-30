@@ -350,4 +350,18 @@
         ORDER BY electricityKwhYear DESC
     </select>
 
+    <select id="selectTopBuildingsByEnergy" resultType="java.util.Map">
+        SELECT a.building_id                                  AS buildingId,
+               d.building_type_cn                             AS buildingTypeCn,
+               d.site_id                                      AS siteId,
+               ROUND(SUM(a.electricity_kwh), 1)               AS electricityKwh
+        FROM agg_building_daily a
+        LEFT JOIN dim_building d ON d.building_id = a.building_id
+        WHERE a.stat_date &gt;= #{startDate} AND a.stat_date &lt;= #{endDate}
+        <if test="siteId != null and siteId != ''">AND a.site_id = #{siteId}</if>
+        GROUP BY a.building_id, d.building_type_cn, d.site_id
+        ORDER BY electricityKwh DESC
+        LIMIT #{limit}
+    </select>
+
 </mapper>

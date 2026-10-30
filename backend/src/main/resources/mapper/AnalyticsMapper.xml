@@ -442,4 +442,20 @@
         LIMIT 1
     </select>
 
+    <select id="selectTopAnomalyDuration" resultType="java.util.Map">
+        SELECT e.building_id                           AS buildingId,
+               e.site_id                               AS siteId,
+               MAX(b.building_type_cn)                 AS buildingTypeCn,
+               MAX(e.duration_hours)                   AS maxDurationHours,
+               SUM(e.duration_hours)                   AS totalDurationHours,
+               COUNT(*)                                AS eventCount
+        FROM fact_anomaly_event e
+        LEFT JOIN dim_building b ON b.building_id = e.building_id
+        WHERE e.start_ts &gt;= #{startDate} AND e.start_ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+        <if test="siteId != null and siteId != ''">AND e.site_id = #{siteId}</if>
+        GROUP BY e.building_id, e.site_id
+        ORDER BY maxDurationHours DESC
+        LIMIT #{limit}
+    </select>
+
 </mapper>

@@ -98,4 +98,15 @@ public interface EnergyQueryMapper {
 
     /** 园区列表 */
     List<Map<String, Object>> selectSites();
+
+    /**
+     * 建筑用电量排行（AI 工具 getTopEnergyBuildings）。
+     * 走 agg_building_daily 预聚合表，只按日期/园区过滤并 GROUP BY 建筑求和，
+     * 不触碰 fact_energy_hourly。
+     */
+    List<Map<String, Object>> selectTopBuildingsByEnergy(
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            @Param("siteId") String siteId,
+            @Param("limit") int limit);
 }

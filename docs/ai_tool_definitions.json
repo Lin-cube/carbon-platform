@@ -1,0 +1,243 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "getParkEnergySummary",
+      "description": "查询某园区在日期范围内的能耗汇总：总用电、空调能耗、碳排放、平均COP、异常小时与峰谷时段。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "siteId": {
+            "type": "string",
+            "description": "园区编号，例如 Eagle"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "开始日期，YYYY-MM-DD"
+          },
+          "endDate": {
+            "type": "string",
+            "description": "结束日期，YYYY-MM-DD"
+          }
+        },
+        "required": [
+          "siteId",
+          "startDate",
+          "endDate"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "getBuildingEnergySummary",
+      "description": "查询单栋建筑在日期范围内的能耗汇总：类型、面积、评级、用电、空调、碳排、COP、异常小时。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "buildingId": {
+            "type": "string",
+            "description": "建筑编号，例如 Eagle_office_Dallas"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "开始日期，YYYY-MM-DD"
+          },
+          "endDate": {
+            "type": "string",
+            "description": "结束日期，YYYY-MM-DD"
+          }
+        },
+        "required": [
+          "buildingId",
+          "startDate",
+          "endDate"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "getBuildingEnergyTrend",
+      "description": "查询单栋建筑的月度能耗趋势（用电/空调/碳排），最多返回 12 个月。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "buildingId": {
+            "type": "string",
+            "description": "建筑编号"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "开始日期，YYYY-MM-DD"
+          },
+          "endDate": {
+            "type": "string",
+            "description": "结束日期，YYYY-MM-DD"
+          }
+        },
+        "required": [
+          "buildingId",
+          "startDate",
+          "endDate"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "getTopEnergyBuildings",
+      "description": "查询日期范围内用电量最高的建筑排行，默认前 10，最多 50。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "siteId": {
+            "type": "string",
+            "description": "园区编号，可空表示全部园区"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "开始日期，YYYY-MM-DD"
+          },
+          "endDate": {
+            "type": "string",
+            "description": "结束日期，YYYY-MM-DD"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "返回条数，默认 10，最大 50"
+          }
+        },
+        "required": [
+          "startDate",
+          "endDate"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "getBuildingCOP",
+      "description": "查询单栋建筑的机组能效：平均/最高/最低 COP、能效评级、供回水温差。无冷冻水计量的建筑返回无数据。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "buildingId": {
+            "type": "string",
+            "description": "建筑编号"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "开始日期，YYYY-MM-DD"
+          },
+          "endDate": {
+            "type": "string",
+            "description": "结束日期，YYYY-MM-DD"
+          }
+        },
+        "required": [
+          "buildingId",
+          "startDate",
+          "endDate"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "getBuildingAnomalies",
+      "description": "查询单栋建筑的异常事件：事件数、异常小时、平均/最长持续时长，以及异常事件明细。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "buildingId": {
+            "type": "string",
+            "description": "建筑编号"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "开始日期，YYYY-MM-DD"
+          },
+          "endDate": {
+            "type": "string",
+            "description": "结束日期，YYYY-MM-DD"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "事件明细条数，默认 10，最大 50"
+          }
+        },
+        "required": [
+          "buildingId",
+          "startDate",
+          "endDate"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "getCarbonEmissionSummary",
+      "description": "查询日期范围内的碳排放汇总（kg/吨），按电网平均排放因子 0.5810 kgCO₂/kWh 核算。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "siteId": {
+            "type": "string",
+            "description": "园区编号，可空表示全部园区"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "开始日期，YYYY-MM-DD"
+          },
+          "endDate": {
+            "type": "string",
+            "description": "结束日期，YYYY-MM-DD"
+          }
+        },
+        "required": [
+          "startDate",
+          "endDate"
+        ]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "getTopAnomalyBuildings",
+      "description": "查询异常持续时长最长的建筑排行（单次最长持续小时、事件数、累计异常小时），默认前 10，最多 50。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "siteId": {
+            "type": "string",
+            "description": "园区编号，可空表示全部园区"
+          },
+          "startDate": {
+            "type": "string",
+            "description": "开始日期，YYYY-MM-DD"
+          },
+          "endDate": {
+            "type": "string",
+            "description": "结束日期，YYYY-MM-DD"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "返回条数，默认 10，最大 50"
+          }
+        },
+        "required": [
+          "startDate",
+          "endDate"
+        ]
+      }
+    }
+  }
+]

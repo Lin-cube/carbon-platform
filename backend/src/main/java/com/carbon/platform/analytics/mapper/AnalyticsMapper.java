@@ -125,4 +125,13 @@ public interface AnalyticsMapper {
     Map<String, Object> selectEfficiencyProfile(@Param("buildingIds") List<String> buildingIds,
                                                  @Param("startDate") LocalDate startDate,
                                                  @Param("endDate") LocalDate endDate);
+
+    /**
+     * 异常持续时长排行（AI 工具 getTopAnomalyBuildings）。
+     * 按单次异常最长持续小时排序，同时返回异常事件数与累计异常小时。
+     */
+    List<Map<String, Object>> selectTopAnomalyDuration(@Param("startDate") LocalDate startDate,
+                                                       @Param("endDate") LocalDate endDate,
+                                                       @Param("siteId") String siteId,
+                                                       @Param("limit") int limit);
 }
