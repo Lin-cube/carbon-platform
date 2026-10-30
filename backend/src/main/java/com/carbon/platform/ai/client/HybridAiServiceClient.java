@@ -211,6 +211,7 @@ public class HybridAiServiceClient implements AiServiceClient {
         if (!yuanbaoSearch.available()) {
             return null;
         }
+        long t0 = System.currentTimeMillis();
         try {
             Map<String, Object> res = yuanbaoSearch.search(request.getQuestion(), 5);
             if (res == null) {
@@ -224,17 +225,10 @@ public class HybridAiServiceClient implements AiServiceClient {
             ChatResponse out = new ChatResponse();
             out.setOk(true);
             List<ChatResponse.Citation> cites = new ArrayList<>();
-            StringBuilder sb = new StringBuilder("知识库未覆盖该问题，我通过联网搜索找到以下资料：\n");
-            int i = 0;
             for (Map<String, Object> r : results) {
-                i++;
                 String title = String.valueOf(r.getOrDefault("title", ""));
                 String url = String.valueOf(r.getOrDefault("url", ""));
                 String snip = String.valueOf(r.getOrDefault("snippet", ""));
-                sb.append(i).append(". ").append(title).append("\n");
-                if (org.springframework.util.StringUtils.hasText(snip) && !"null".equals(snip)) {
-                    sb.append("   ").append(snip).append("\n");
-                }
                 ChatResponse.Citation c = new ChatResponse.Citation();
                 c.setSource(title);
                 c.setUrl(url);
@@ -242,11 +236,31 @@ public class HybridAiServiceClient implements AiServiceClient {
                 c.setPage(null);
                 cites.add(c);
             }
-            sb.append("\n（数据来源：腾讯元宝搜索 · 联网检索，点击来源链接可查看原文）");
-            out.setAnswer(sb.toString());
+
+            // 优先让大模型把检索资料整理成连贯回答；模型不可用时回退到朴素罗列
+            String synthesized = toolCalling.synthesizeFromWeb(request.getQuestion(), results);
+            String answer;
+            if (synthesized != null && !synthesized.isBlank()) {
+                answer = synthesized
+                        + "\n\n（来源：腾讯元宝搜索 · 联网检索，可点击下方参考来源查看原文）";
+            } else {
+                StringBuilder sb = new StringBuilder("我通过联网搜索找到以下资料：\n");
+                int i = 0;
+                for (ChatResponse.Citation c : cites) {
+                    i++;
+                    sb.append(i).append(". ").append(c.getSource()).append("\n");
+                    if (org.springframework.util.StringUtils.hasText(c.getSnippet())) {
+                        sb.append("   ").append(c.getSnippet()).append("\n");
+                    }
+                }
+                answer = sb.toString()
+                        + "\n（来源：腾讯元宝搜索 · 联网检索，可点击下方参考来源查看原文）";
+            }
+            out.setAnswer(answer);
             out.setCitations(cites);
             out.setDataSource("联网搜索（元宝 SearchPro）");
             out.setConfidence(0.6);
+            out.setElapsedMs(System.currentTimeMillis() - t0);
             return out;
         } catch (Exception e) {
             log.warn("联网搜索兜底失败：{}", e.getMessage());

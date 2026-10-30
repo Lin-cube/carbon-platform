@@ -237,6 +237,45 @@ public class DeepSeekToolCallingService {
         }
     }
 
+    /**
+     * 把联网搜索结果整理成一段连贯的中文回答（而不是罗列原文）。
+     * 仅使用资料中的信息，资料不足时明确说明。
+     *
+     * @return 整理后的回答；LLM 不可用或失败返回 null（上层回退到原始罗列）
+     */
+    public String synthesizeFromWeb(String question, List<Map<String, Object>> results) {
+        if (!available() || results == null || results.isEmpty()) {
+            return null;
+        }
+        StringBuilder material = new StringBuilder();
+        int i = 0;
+        for (Map<String, Object> r : results) {
+            i++;
+            String title = String.valueOf(r.getOrDefault("title", ""));
+            String snippet = String.valueOf(r.getOrDefault("snippet", ""));
+            String site = String.valueOf(r.getOrDefault("site", ""));
+            material.append(i).append(". ").append(title);
+            if (!site.isBlank() && !"null".equals(site)) {
+                material.append("（").append(site).append("）");
+            }
+            material.append("\n   ").append(snippet).append("\n");
+        }
+        String system = """
+                你是碳能智控运维平台的 AI 助手小E。请根据下面提供的联网搜索资料回答用户问题。
+                要求：
+                1. 直接回答，条理清晰（可分 2~4 点），不要罗列原文，不要复述"资料1、资料2"；
+                2. 只使用资料中的信息，不确定的内容不要编造；
+                3. 若资料与问题无关或不足以回答，直接说明"未找到可靠资料"，不要硬凑；
+                4. 回答 250 字以内，用中文。""";
+        String user = "用户问题：" + question + "\n\n联网搜索资料：\n" + material;
+        try {
+            return llmClient.chat(system, user, 0.3, 600);
+        } catch (Exception e) {
+            log.warn("联网资料整理失败：{}", e.getMessage());
+            return null;
+        }
+    }
+
     // ================================================================ 内部
 
     private Map<String, Object> msg(String role, String content, String toolCallId,
