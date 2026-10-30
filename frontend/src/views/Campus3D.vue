@@ -249,8 +249,9 @@
       </div>
     </div>
 
-    <!-- 右下角视角工具 -->
-    <div class="view-tools" :class="{ shifted: !!selected }">
+    <!-- 右下角：视角工具 + AI 解读竖向堆叠，避免互相遮挡 -->
+    <div class="corner-stack" :class="{ shifted: !!selected }">
+      <div class="view-tools">
       <el-tooltip content="恢复默认视角" placement="left">
         <button class="tool-btn" type="button" @click="resetView">
           <el-icon><Aim /></el-icon>
@@ -259,7 +260,7 @@
     </div>
 
     <!-- 右下角 AI 解读（可折叠，不遮挡画布） -->
-    <div class="ai-float" :class="{ collapsed: !aiOpen, shifted: !!selected }">
+      <div class="ai-float" :class="{ collapsed: !aiOpen }">
       <div class="ai-float-head" @click="aiOpen = !aiOpen">
         <span class="ai-float-title">
           <el-icon><MagicStick /></el-icon>
@@ -276,6 +277,7 @@
           :show-meta="false"
           @focus-building="onFocusBuilding"
         />
+      </div>
       </div>
     </div>
 
@@ -1154,7 +1156,7 @@ function gotoAnomaly() {
 
 onMounted(async () => {
   await nextTick()
-  // 窄屏默认收起控制面板，优先保证 3D 沙盘面积
+
   panelCollapsed.value = window.innerWidth < 1180
 
   // 【为什么单独 try】initThree() 依赖 WebGL。若浏览器禁用了硬件加速、
@@ -1278,6 +1280,7 @@ onBeforeUnmount(() => {
   font-size: 11px;
   line-height: 1.7;
   color: #6f8085;
+  overflow-wrap: break-word;
 }
 
 /* 数据口径说明 */
@@ -1290,6 +1293,7 @@ onBeforeUnmount(() => {
   font-size: 10.5px;
   line-height: 1.75;
   color: #6f8085;
+  overflow-wrap: break-word;
 }
 .scope-note b { color: #46584f; }
 
@@ -1595,24 +1599,32 @@ onBeforeUnmount(() => {
 }
 
 /* 详情抽屉打开时，AI 卡与视角工具左移让位，避免遮挡 */
-.ai-float.shifted { right: 424px; }
-.view-tools.shifted { right: 424px; }
-
+/* 抽屉打开时整组左移让位；小屏下隐藏 AI 卡但保留视角按钮 */
 @media (max-width: 1400px) {
-  .ai-float.shifted { right: 16px; bottom: -100vh; }   /* 抽屉打开时小屏隐藏 AI 卡 */
+  .corner-stack.shifted { right: 424px; }
+  .corner-stack.shifted .ai-float { display: none; }
 }
 @media (max-width: 900px) {
-  .ai-float { width: calc(100vw - 24px); left: 12px; right: 12px; }
-  .ai-float.shifted { display: none; }
-  .view-tools.shifted { right: 18px; }
+  .corner-stack { right: 12px; bottom: 12px; }
+  .ai-float { width: calc(100vw - 24px); }
+  .corner-stack.shifted { right: 12px; }
 }
 
 /* 右下角视角工具条 */
-.view-tools {
+.corner-stack {
   position: absolute;
-  right: 18px;
-  bottom: 18px;
-  z-index: 12;
+  right: 16px;
+  bottom: 16px;
+  z-index: 11;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  transition: right 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.corner-stack.shifted { right: 424px; }
+
+.view-tools {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1641,23 +1653,24 @@ onBeforeUnmount(() => {
 }
 
 .dotted {
-  border-bottom: 1px dashed rgba(255, 255, 255, 0.35);
+  border-bottom: 1px dashed rgba(53, 134, 107, 0.45);
   cursor: help;
 }
 
 /* 右下角 AI 解读悬浮卡 */
 .ai-float {
-  position: absolute;
-  right: 16px;
-  bottom: 16px;
   width: min(460px, calc(100vw - 32px));
-  transition: right 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
   max-height: 46vh;
   display: flex;
   flex-direction: column;
-  background: rgba(255, 255, 255, 0.97);
-  border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
+  background: rgba(255, 255, 255, 0.93);
+  border: 1px solid rgba(206, 219, 210, 0.85);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 14px 36px -18px rgba(37, 61, 53, 0.28);
+  backdrop-filter: blur(10px) saturate(118%);
+  -webkit-backdrop-filter: blur(10px) saturate(118%);
   z-index: 10;
   overflow: hidden;
   transition: max-height 0.25s ease;
@@ -1671,25 +1684,28 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   padding: 10px 14px;
   cursor: pointer;
-  border-bottom: 1px solid #ebeef5;
-  background: linear-gradient(90deg, #f0f7ff, #ffffff);
+  border-bottom: 1px solid rgba(37, 61, 53, 0.07);
+  background: linear-gradient(90deg, #f0f6f2, #ffffff);
   flex-shrink: 0;
 }
 .ai-float-title {
   font-size: 13px;
   font-weight: 600;
-  color: #1f2d3d;
+  color: #253d35;
   display: flex;
   align-items: center;
   gap: 6px;
 }
+.ai-float-title .el-icon {
+  color: #35866b;   /* 绿色强调图标 */
+}
 .ai-float-site {
   font-weight: 400;
-  color: #409eff;
+  color: #35866b;
   font-size: 12px;
 }
 .ai-float-toggle {
-  color: #909399;
+  color: #7b8b84;
 }
 .ai-float-body {
   overflow-y: auto;
@@ -1718,7 +1734,7 @@ onBeforeUnmount(() => {
   height: calc(100vh - 88px);
   border-radius: 8px;
   overflow: hidden;
-  background: #0b1220;
+  background: #eaeef0;   /* 浅色沙盘底色（WebGL 失败时的回退背景） */
 }
 
 .canvas-host { width: 100%; height: 100%; }
@@ -1727,7 +1743,7 @@ onBeforeUnmount(() => {
   position: absolute;
   z-index: 10;
   background: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(206, 219, 210, 0.85);
   border-radius: 16px;
   padding: 14px 16px;
   color: #253d35;
@@ -1763,9 +1779,11 @@ onBeforeUnmount(() => {
 .field { margin-bottom: 11px; }
 .field label {
   display: block;
-  font-size: 11px;
-  color: #7b8b84;
-  margin-bottom: 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: #5d6e66;
+  margin-bottom: 6px;
+  letter-spacing: 0.02em;
 }
 
 .legend-title { font-size: 11px; color: #7b8b84; margin-bottom: 6px; }
@@ -1784,15 +1802,25 @@ onBeforeUnmount(() => {
 .stat-row {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: baseline;
   font-size: 12px;
-  padding: 5px 0;
-  border-bottom: 1px dashed rgba(37, 61, 53, 0.1);
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(37, 61, 53, 0.08);
 }
 .stat-row:last-child { border-bottom: none; }
-.stat-row span { color: #6f8085; }
-.stat-row b { color: #253d35; font-variant-numeric: tabular-nums; }
-.stat-row b.warn { color: #b4574c; }
+.stat-row span {
+  color: #6f8085;
+  flex-shrink: 0;
+  overflow-wrap: break-word;
+}
+.stat-row b {
+  color: #253d35;
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.stat-row b.warn { color: #c26b62; }
 
 .canvas-mask {
   position: absolute;
@@ -1802,9 +1830,9 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  color: #7dd3fc;
+  color: #5d6e66;
   font-size: 13px;
-  background: rgba(11, 18, 32, 0.75);
+  background: rgba(247, 249, 246, 0.86);
   z-index: 20;
 }
 
