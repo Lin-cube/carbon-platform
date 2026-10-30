@@ -1,13 +1,30 @@
 <template>
   <div>
-    <!-- 筛选栏 -->
+    <!-- 轻量欢迎信息 -->
+    <div class="dash-head">
+      <div class="dash-head-main">
+        <span class="dash-head-title">能源全景监控</span>
+        <span class="dash-head-badge">历史数据</span>
+      </div>
+      <div class="dash-head-sub">
+        当前园区 <b>{{ app.siteId || '全部园区' }}</b> · 数据区间
+        <b>{{ range[0] }}</b> ~ <b>{{ range[1] }}</b> · 未标注为实时
+      </div>
+    </div>
+
+    <!-- 查询失败提示 -->
+    <el-alert v-if="loadError" type="warning" :closable="false" show-icon class="mb-12"
+              title="数据加载失败"
+              description="部分数据未能获取，请检查服务状态后点击「刷新」重试。" />
+
+    <!-- 筛选工具条 -->
     <div class="page-card mb-12">
       <div class="filter-bar" style="margin-bottom: 0">
         <span class="text-dim">园区</span>
         <el-select v-model="app.siteId" placeholder="全部园区" clearable style="width: 150px"
                    @change="loadAll">
           <el-option v-for="s in sites" :key="s.siteId" :label="`${s.siteId}（${s.buildingCount}栋）`"
-                     :value="s.siteId" />
+                      :value="s.siteId" />
         </el-select>
 
         <span class="text-dim">时间范围</span>
@@ -25,14 +42,20 @@
       </div>
     </div>
 
-    <!-- KPI 指标卡 -->
-    <div class="kpi-row">
+    <!-- KPI 指标卡：首次加载显示骨架，加载完显示真实值 -->
+    <div v-if="firstLoading" class="kpi-row">
+      <div v-for="i in 6" :key="i" class="kpi-card kpi-skeleton">
+        <el-skeleton animated :rows="2" />
+      </div>
+    </div>
+    <div v-else class="kpi-row">
       <div class="kpi-card">
         <div class="kpi-label">总用电量</div>
         <div class="kpi-value">{{ fmtNum(overview?.electricityKwh) }}<span class="kpi-unit">kWh</span></div>
         <div class="kpi-sub">区间 {{ overview?.timeRange || '--' }}</div>
       </div>
-      <div class="kpi-card green">
+
+      <div class="kpi-card">
         <div class="kpi-label">
           空调系统能耗
           <el-tooltip placement="bottom" raw-content
@@ -46,22 +69,28 @@
           <span class="kpi-sub-note">· 冷热量口径</span>
         </div>
       </div>
-      <div class="kpi-card orange">
+
+      <div class="kpi-card">
         <div class="kpi-label">碳排放量</div>
         <div class="kpi-value">{{ fmtNum(overview?.carbonKg) }}<span class="kpi-unit">kgCO₂</span></div>
         <div class="kpi-sub">因子 0.5810 kgCO₂/kWh</div>
       </div>
-      <div class="kpi-card red">
+
+      <div class="kpi-card">
         <div class="kpi-label">能耗异常率</div>
-        <div class="kpi-value">{{ overview?.anomalyRate ?? '--' }}<span class="kpi-unit">%</span></div>
+        <div class="kpi-value">
+          {{ anomalyRatePct }}<span class="kpi-unit">%</span>
+        </div>
         <div class="kpi-sub">异常 {{ fmtInt(overview?.anomalyHours) }} 小时</div>
       </div>
+
       <div class="kpi-card">
         <div class="kpi-label">建筑 / 园区</div>
         <div class="kpi-value">{{ overview?.buildingCount ?? '--' }}<span class="kpi-unit">栋</span></div>
         <div class="kpi-sub">园区 {{ overview?.siteCount ?? '--' }} 个</div>
       </div>
-      <div class="kpi-card green">
+
+      <div class="kpi-card">
         <div class="kpi-label">平均 COP</div>
         <div class="kpi-value">{{ overview?.copAvg ?? '--' }}</div>
         <div class="kpi-sub">仅含冷冻水计量建筑</div>
@@ -74,7 +103,8 @@
         能耗趋势与室外温度
         <span class="src-badge src-measured">实测</span>
       </div>
-      <EChart :option="trendOption" height="330px" :loading="loading" />
+      <EChart v-if="hasSeries" :option="trendOption" height="330px" :loading="loading" />
+      <el-empty v-else description="暂无趋势数据" :image-size="72" />
     </div>
 
     <div class="grid-2 mb-12">
@@ -125,7 +155,7 @@
 
       <AiInsight
         scope="dashboard"
-        title="AI 看板解读"
+        title="AI 能源洞察"
         :start-date="range[0]"
         :end-date="range[1]"
         :site-id="app.siteId"
@@ -143,8 +173,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Download } from '@element-plus/icons-vue'
 import EChart from '@/components/EChart.vue'
 import AiInsight from '@/components/AiInsight.vue'
-import { energyApi, analyticsApi, systemApi } from '@/api'
-import { request } from '@/api/request'
+import { energyApi, analyticsApi } from '@/api'
 import { useAppStore } from '@/stores/app'
 import { fmtNum, fmtInt, type EChartsOption } from '@/utils/echarts'
 import type {
@@ -159,6 +188,7 @@ function onFocusBuilding(buildingId: string) {
   router.push({ path: '/anomaly', query: { buildingId } })
 }
 const loading = ref(false)
+const loadError = ref(false)
 const sites = ref<SiteRow[]>([])
 const overview = ref<OverviewVO | null>(null)
 const series = ref<TimeSeriesVO | null>(null)
@@ -170,19 +200,24 @@ const granularity = ref<'daily' | 'monthly'>('daily')
 const range = ref<[string, string]>([app.startDate, app.endDate])
 const gradeDist = ref<{ grade: string; count: number }[]>([])
 
-
-
+/** 首次加载（用于 KPI 骨架屏） */
+const firstLoading = computed(() => loading.value && overview.value === null)
+/** 趋势图是否有数据 */
+const hasSeries = computed(() => (series.value?.points?.length ?? 0) > 0)
+/**
+ * 能耗异常率百分比。
+ * 后端 overview.anomalyRate 是「比率」（0.0448 = 4.48%），
+ * 直接拼 "%" 会显示成 0.0448%，这里 ×100 转成百分比。
+ */
+const anomalyRatePct = computed(() => {
+  const r = overview.value?.anomalyRate
+  return r != null ? (r * 100).toFixed(2) : '--'
+})
 
 const query = () => ({
   startDate: app.startDate,
   endDate: app.endDate,
   siteId: app.siteId || undefined
-})
-
-const hvacRatio = computed(() => {
-  const e = overview.value?.electricityKwh || 0
-  const h = overview.value?.hvacKwh || 0
-  return e > 0 ? ((h / e) * 100).toFixed(1) : '--'
 })
 
 function onRangeChange(v: [string, string] | null) {
@@ -192,12 +227,28 @@ function onRangeChange(v: [string, string] | null) {
   }
 }
 
+// ---------------------------------------------------------------- 图表配色（与浅色设计系统协调）
+const TEAL = '#2A9D8F'          // 青绿：用电量主色
+const TEAL_DARK = '#35866B'     // 品牌绿：强调
+const AMBER = '#E0A84C'         // 琥珀：室外温度
+
+/** 建筑类型占比的环图配色：柔和、可区分 */
+const TYPE_COLORS = [
+  '#35866B', '#4B9C8F', '#5B8FA8', '#7A93C4', '#9A7FBE', '#C2766A',
+  '#D9B65C', '#C2A878', '#8FA88C', '#94A3B8', '#6E9E79', '#B08A5A',
+  '#C48FA0', '#7FB69B', '#A78A6E'
+]
+
+/** 能耗评级配色（与 3D 园区一致） */
+const GRADE_COLORS: Record<string, string> = {
+  A: '#4F9D77', B: '#7FB98C', C: '#D3B25C', D: '#D18F5F', E: '#C26B62'
+}
+
 // ---------------------------------------------------------------- 图表配置
 const baseGrid = { left: 56, right: 24, top: 40, bottom: 44 }
 
 const trendOption = computed<EChartsOption>(() => {
   const pts = series.value?.points || []
-  // 按时间聚合（多建筑求和）
   const map = new Map<string, { kwh: number; temp: number; n: number }>()
   for (const p of pts) {
     const cur = map.get(p.time) || { kwh: 0, temp: 0, n: 0 }
@@ -225,15 +276,25 @@ const trendOption = computed<EChartsOption>(() => {
       : undefined,
     series: [
       { name: '用电量', type: 'line', smooth: true, showSymbol: false, data: kwh,
-        areaStyle: { opacity: 0.18 }, lineStyle: { width: 2 }, itemStyle: { color: '#2f7dff' } },
+        lineStyle: { width: 2, color: TEAL },
+        itemStyle: { color: TEAL },
+        areaStyle: { color: {
+          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: 'rgba(42, 157, 143, 0.20)' },
+            { offset: 1, color: 'rgba(42, 157, 143, 0.02)' }
+          ]
+        } } },
       { name: '室外温度', type: 'line', yAxisIndex: 1, smooth: true, showSymbol: false,
-        data: temp, lineStyle: { width: 1.6, type: 'dashed' }, itemStyle: { color: '#f59e0b' } }
+        data: temp, lineStyle: { width: 1.6, type: 'dashed', color: AMBER },
+        itemStyle: { color: AMBER } }
     ]
   }
 })
 
 const siteOption = computed<EChartsOption>(() => {
   const items = (bySite.value?.items || []).slice(0, 12).reverse()
+  const top = items.length - 1   // reverse 后最大值在数组末尾（ECharts 里最上面）
   return {
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
       valueFormatter: (v: any) => fmtNum(Number(v)) + ' kWh' },
@@ -241,12 +302,10 @@ const siteOption = computed<EChartsOption>(() => {
     xAxis: { type: 'value', axisLabel: { formatter: (v: number) => fmtNum(v, 0) } },
     yAxis: { type: 'category', data: items.map((i) => i.label) },
     series: [{
-      type: 'bar', data: items.map((i) => i.value), barMaxWidth: 16,
-      itemStyle: {
-        color: '#2f7dff', borderRadius: [0, 3, 3, 0],
-        // 最高值高亮
-        opacity: 1
-      },
+      type: 'bar', data: items.map((i, idx) => ({
+        value: i.value,
+        itemStyle: { color: idx === top ? TEAL_DARK : TEAL, borderRadius: [0, 4, 4, 0] }
+      })), barMaxWidth: 16,
       label: { show: true, position: 'right', fontSize: 10,
         formatter: (p: any) => fmtNum(Number(p.value), 1) }
     }]
@@ -257,10 +316,14 @@ const typeOption = computed<EChartsOption>(() => {
   const items = (byType.value?.items || []).filter((i) => i.value > 0)
   return {
     tooltip: { trigger: 'item', formatter: '{b}<br/>{c} kWh（{d}%）' },
-    legend: { type: 'scroll', orient: 'vertical', right: 6, top: 'center', itemHeight: 9 },
+    legend: { type: 'scroll', orient: 'vertical', right: 6, top: 'center',
+              itemHeight: 9, itemWidth: 9, textStyle: { fontSize: 11 } },
     series: [{
       type: 'pie', radius: ['42%', '68%'], center: ['36%', '50%'],
-      data: items.map((i) => ({ name: i.label, value: i.value })),
+      data: items.map((i, idx) => ({
+        name: i.label, value: i.value,
+        itemStyle: { color: TYPE_COLORS[idx % TYPE_COLORS.length] }
+      })),
       label: { show: false },
       emphasis: { label: { show: true, fontSize: 12, fontWeight: 'bold' } }
     }]
@@ -270,7 +333,7 @@ const typeOption = computed<EChartsOption>(() => {
 const tariffOption = computed<EChartsOption>(() => {
   const tb = period.value?.tariffBuckets || []
   const colors: Record<string, string> = {
-    '尖峰': '#ef4444', '高峰': '#f97316', '平段': '#eab308', '低谷': '#22c55e'
+    '尖峰': '#C26B62', '高峰': '#D18F5F', '平段': '#D9B65C', '低谷': '#4F9D77'
   }
   return {
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' },
@@ -282,7 +345,7 @@ const tariffOption = computed<EChartsOption>(() => {
       type: 'bar', barMaxWidth: 46,
       data: tb.map((t) => ({
         value: t.electricityKwh,
-        itemStyle: { color: colors[t.name] || '#2f7dff', borderRadius: [4, 4, 0, 0] }
+        itemStyle: { color: colors[t.name] || TEAL, borderRadius: [4, 4, 0, 0] }
       })),
       label: { show: true, position: 'top', fontSize: 11,
         formatter: (p: any) => `${tb[p.dataIndex]?.percentage ?? 0}%` }
@@ -302,18 +365,15 @@ const anomalyOption = computed<EChartsOption>(() => {
     dataZoom: t.length > 60 ? [{ type: 'inside' }] : undefined,
     series: [
       { name: '异常小时数', type: 'bar', stack: 'a', data: t.map((d) => d.anomalyHours),
-        itemStyle: { color: '#f97316' } },
+        itemStyle: { color: '#D18F5F' } },
       { name: '事件数', type: 'line', smooth: true, showSymbol: false,
-        data: t.map((d) => d.eventCount), itemStyle: { color: '#2f7dff' } }
+        data: t.map((d) => d.eventCount), itemStyle: { color: TEAL } }
     ]
   }
 })
 
 const gradeOption = computed<EChartsOption>(() => {
   const order = ['A', 'B', 'C', 'D', 'E']
-  const colors: Record<string, string> = {
-    A: '#22c55e', B: '#84cc16', C: '#eab308', D: '#f97316', E: '#ef4444'
-  }
   const map = new Map(gradeDist.value.map((g) => [g.grade, g.count]))
   return {
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
@@ -324,7 +384,7 @@ const gradeOption = computed<EChartsOption>(() => {
       type: 'bar', barMaxWidth: 40,
       data: order.map((g) => ({
         value: map.get(g) || 0,
-        itemStyle: { color: colors[g], borderRadius: [4, 4, 0, 0] }
+        itemStyle: { color: GRADE_COLORS[g], borderRadius: [4, 4, 0, 0] }
       })),
       label: { show: true, position: 'top', fontSize: 11 }
     }]
@@ -334,6 +394,7 @@ const gradeOption = computed<EChartsOption>(() => {
 // ---------------------------------------------------------------- 数据加载
 async function loadAll() {
   loading.value = true
+  loadError.value = false
   try {
     const q = query()
     const [ov, st, ps, an] = await Promise.all([
@@ -354,7 +415,7 @@ async function loadAll() {
     bySite.value = bs
     byType.value = bt
   } catch (e) {
-    /* 拦截器已提示 */
+    loadError.value = true
   } finally {
     loading.value = false
   }
@@ -401,24 +462,105 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.kpi-help {
-  margin-left: 4px;
+/* ── 页面顶部欢迎信息 ── */
+.dash-head {
+  margin-bottom: 14px;
+}
+.dash-head-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dash-head-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--carbon-text, #253D35);
+  letter-spacing: 0.01em;
+}
+.dash-head-badge {
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: var(--carbon-primary-soft, #EBF3F0);
+  color: var(--carbon-primary, #35866B);
+  font-size: 11px;
+  font-weight: 500;
+}
+.dash-head-sub {
+  margin-top: 5px;
+  font-size: 12.5px;
+  color: var(--carbon-text-dim, #5D6E66);
+}
+.dash-head-sub b {
+  color: var(--carbon-text, #253D35);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── KPI 卡：白卡 + 雾灰底 + 薄荷绿点缀，去掉高饱和彩色侧边框 ── */
+.kpi-card {
+  background: var(--carbon-panel, #FFFFFF);
+  border: 1px solid var(--carbon-border, #E3E9E4);
+  border-radius: 14px;
+  padding: 16px 18px;
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+.kpi-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+/* 顶部一条极淡的薄荷绿点缀线（非高饱和侧边） */
+.kpi-card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--carbon-primary, #35866B), rgba(53, 134, 107, 0));
+  opacity: 0.35;
+}
+
+.kpi-skeleton { height: 104px; }
+
+.kpi-label {
   font-size: 12px;
-  color: #a9b4b8;
+  color: var(--carbon-text-dim, #5D6E66);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.kpi-value {
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--carbon-text, #253D35);
+  font-variant-numeric: tabular-nums;
+}
+.kpi-unit {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--carbon-text-mute, #7B8B84);
+  margin-left: 4px;
+}
+.kpi-sub {
+  font-size: 11px;
+  color: var(--carbon-text-mute, #7B8B84);
+  margin-top: 6px;
+}
+.kpi-help {
+  margin-left: 2px;
+  font-size: 12px;
+  color: #A9B4B8;
   cursor: help;
   vertical-align: middle;
 }
 .kpi-sub-note {
-  color: #a9b4b8;
+  color: #A9B4B8;
 }
 
-
-
-
-
-
-
-
-
-.text-danger { color: #ef4444; font-weight: 600; }
+.text-danger { color: #C26B62; font-weight: 600; }
 </style>
