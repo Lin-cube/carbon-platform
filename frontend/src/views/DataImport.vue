@@ -205,7 +205,12 @@
           <div class="kpi-value">{{ result.totalRows }}<span class="kpi-unit">行</span></div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">有效</div>
+          <div class="kpi-label">
+            将写入
+            <el-tooltip placement="top" content="通过校验、会被写入数据库的行数">
+              <el-icon class="kpi-help"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </div>
           <div class="kpi-value ok">{{ result.successRows }}<span class="kpi-unit">行</span></div>
         </div>
         <div class="kpi-card risk">
@@ -213,7 +218,13 @@
           <div class="kpi-value">{{ result.failedRows }}<span class="kpi-unit">行</span></div>
         </div>
         <div class="kpi-card risk">
-          <div class="kpi-label">待清洗</div>
+          <div class="kpi-label">
+            清洗剔除
+            <el-tooltip placement="top"
+                        content="被清洗规则剔除、不会写入数据库的行：负值 / 单位混用 / 重复行 / 按策略剔除的缺失值。明细见下方表格。">
+              <el-icon class="kpi-help"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </div>
           <div class="kpi-value">{{ result.skippedRows }}<span class="kpi-unit">行</span></div>
         </div>
       </div>
