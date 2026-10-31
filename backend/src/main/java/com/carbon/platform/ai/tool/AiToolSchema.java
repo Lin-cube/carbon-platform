@@ -89,6 +89,14 @@ public class AiToolSchema {
                 List.of("buildingId", "startDate", "endDate")));
 
         tools.add(fn(
+                "getAnomalyHandleHistory", "【只读】查询历史「已处理/已忽略」的真实处置案例，返回处理状态、处理人、处理时间与处理备注。用于回答「类似异常以前怎么处理的」「有没有处置经验可参考」。本工具不能修改任何数据；AI 无权把异常标记为已处理。",
+                List.of(
+                        p("buildingId", "string", "建筑编号，可空表示不限建筑"),
+                        p("anomalyType", "string", "异常类型，可空表示不限类型"),
+                        p("limit", "integer", "返回条数，默认 5，最大 20")),
+                List.of()));
+
+        tools.add(fn(
                 "getCarbonEmissionSummary", "查询日期范围内的碳排放汇总（kg/吨），按电网平均排放因子 0.5810 kgCO₂/kWh 核算。",
                 List.of(
                         p("siteId", "string", "园区编号，可空表示全部园区"),

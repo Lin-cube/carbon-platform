@@ -3,7 +3,8 @@ import type {
   LoginRequest, LoginResponse, UserInfo, SystemOverview,
   DimensionVO, OverviewVO, BreakdownVO, EnergyQueryRequest, TimeSeriesVO,
   PeriodSummaryVO, CopAnalysisVO, AnomalyAnalysisVO, DiagnoseResult,
-  SuggestResult, ChatResponse, BuildingRow, SiteRow, AiReport
+  SuggestResult, ChatResponse, BuildingRow, SiteRow, AiReport,
+  AnomalyHandleDetail, AnomalyHandleLog
 } from '@/types/api'
 
 // ---------------------------------------------------------------- 认证
@@ -52,6 +53,7 @@ export const analyticsApi = {
   scanAnomalies: (params: {
     startDate: string; endDate: string; buildingId?: string; siteId?: string
     anomalyType?: string; severity?: string; minDuration?: number
+    handleStatus?: string
     pageNum?: number; pageSize?: number
   }) => request<{ total: number; pageNum: number; pageSize: number; events: unknown[] }>(
     { url: '/analytics/anomalies/scan', method: 'get', params }),
@@ -66,6 +68,30 @@ export const analyticsApi = {
     startDate: string; endDate: string; siteId?: string
     buildingType?: string; periodType?: string
   }, filename: string) => download('/analytics/report/export', params, filename)
+}
+
+/**
+ * 异常处置接口。
+ *
+ * 写操作（handle）后端用 @PreAuthorize 限制为 admin/operator，
+ * viewer 调用会拿到 403，前端也会隐藏入口。
+ */
+export const anomalyHandleApi = {
+  detail: (id: number) =>
+    request<AnomalyHandleDetail>({ url: `/anomalies/${id}`, method: 'get' }),
+
+  history: (id: number) =>
+    request<AnomalyHandleLog[]>({ url: `/anomalies/${id}/history`, method: 'get' }),
+
+  handle: (id: number, data: { status: string; note?: string; version?: number }) =>
+    request<AnomalyHandleDetail>({ url: `/anomalies/${id}/handle`, method: 'post', data }),
+
+  handledCases: (params: { buildingId?: string; anomalyType?: string; limit?: number }) =>
+    request<{ count: number; cases: AnomalyHandleLog[] }>(
+      { url: '/anomalies/handled', method: 'get', params }),
+
+  stats: (params: { startDate: string; endDate: string; buildingId?: string }) =>
+    request<Record<string, number>>({ url: '/anomalies/stats', method: 'get', params })
 }
 
 // ---------------------------------------------------------------- AI 助手

@@ -92,10 +92,11 @@ public class AnalyticsController {
             @RequestParam(required = false) String anomalyType,
             @RequestParam(required = false) String severity,
             @RequestParam(required = false) Integer minDuration,
+            @RequestParam(required = false) String handleStatus,
             @RequestParam(defaultValue = "1") int pageNum,
             @RequestParam(defaultValue = "20") int pageSize) {
         return R.ok(analyticsService.scanAnomalies(startDate, endDate, splitIds(buildingId),
-                siteId, anomalyType, severity, minDuration, pageNum, pageSize));
+                siteId, anomalyType, severity, minDuration, handleStatus, pageNum, pageSize));
     }
 
     // ================================================================

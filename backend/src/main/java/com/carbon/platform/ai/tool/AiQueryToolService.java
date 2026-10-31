@@ -67,6 +67,8 @@ public class AiQueryToolService {
     private static final BigDecimal CARBON_FACTOR = new BigDecimal("0.5810");
 
     private final AnalyticsService analyticsService;
+    /** 历史处置案例（只读） */
+    private final com.carbon.platform.analytics.service.AnomalyHandleService anomalyHandleService;
     private final EnergyQueryService energyQueryService;
     private final EnergyQueryMapper energyQueryMapper;
     private final AnalyticsMapper analyticsMapper;
@@ -92,6 +94,9 @@ public class AiQueryToolService {
                     buildingCop(str(a, "buildingId"), str(a, "startDate"), str(a, "endDate"));
             case "getBuildingAnomalies" ->
                     buildingAnomalies(str(a, "buildingId"), str(a, "startDate"), str(a, "endDate"), intArg(a, "limit", DEFAULT_LIMIT));
+            case "getAnomalyHandleHistory" ->
+                    anomalyHandleHistory(str(a, "buildingId"), str(a, "anomalyType"),
+                            intArg(a, "limit", 5));
             case "diagnoseAnomaly" ->
                     diagnoseAnomaly(str(a, "buildingId"), str(a, "startDate"), str(a, "endDate"));
             case "getOptimizationAdvice" ->
@@ -247,6 +252,28 @@ public class AiQueryToolService {
         out.put("avgDurationHours", an.getAvgDurationHours());
         out.put("maxDurationHours", an.getMaxDurationHours());
         out.put("events", scan.get("events"));
+        return out;
+    }
+
+    /**
+     * ⑮ 历史处置案例（只读）。
+     *
+     * <p>把人工填写过的处理备注作为「真实处置经验」提供给模型参考，
+     * 而不是让模型凭空编造运维方案。该工具不提供任何写能力。
+     */
+    public Map<String, Object> anomalyHandleHistory(String buildingId, String anomalyType, int limit) {
+        if (buildingId != null && !buildingId.isBlank()) {
+            validateBuildingId(buildingId);
+        }
+        int n = Math.max(1, Math.min(limit, 20));
+        java.util.List<Map<String, Object>> cases =
+                anomalyHandleService.handledCases(buildingId, anomalyType, n);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("count", cases.size());
+        out.put("cases", cases);
+        out.put("note", cases.isEmpty()
+                ? "暂无历史处置记录；不得据此编造处置经验。"
+                : "以上为运维人员人工填写的历史处置记录，仅供参考，不代表当前异常的处置结论。");
         return out;
     }
 

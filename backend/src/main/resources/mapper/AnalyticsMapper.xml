@@ -292,7 +292,10 @@
                e.duration_hours AS durationHours, e.anomaly_type AS anomalyType,
                e.severity, e.peak_value AS peakValue,
                e.baseline_value AS baselineValue, e.deviation_pct AS deviationPct,
-               e.handled, e.handle_note AS handleNote
+               e.handled, e.handle_note AS handleNote,
+               e.handle_status AS handleStatus, e.handle_by AS handleBy,
+               DATE_FORMAT(e.handle_at, '%Y-%m-%d %H:%i') AS handleAt,
+               e.handle_version AS handleVersion
         FROM fact_anomaly_event e
         LEFT JOIN dim_building b ON b.building_id = e.building_id
         <where>
@@ -300,6 +303,7 @@
             <if test="anomalyType != null and anomalyType != ''">AND e.anomaly_type = #{anomalyType}</if>
             <if test="severity != null and severity != ''">AND e.severity = #{severity}</if>
             <if test="minDuration != null">AND e.duration_hours &gt;= #{minDuration}</if>
+            <if test="handleStatus != null and handleStatus != ''">AND e.handle_status = #{handleStatus}</if>
             <if test="siteId != null and siteId != ''">AND e.site_id = #{siteId}</if>
             <if test="buildingIds != null and buildingIds.size() > 0">
                 AND e.building_id IN
@@ -319,6 +323,7 @@
             <if test="anomalyType != null and anomalyType != ''">AND e.anomaly_type = #{anomalyType}</if>
             <if test="severity != null and severity != ''">AND e.severity = #{severity}</if>
             <if test="minDuration != null">AND e.duration_hours &gt;= #{minDuration}</if>
+            <if test="handleStatus != null and handleStatus != ''">AND e.handle_status = #{handleStatus}</if>
             <if test="siteId != null and siteId != ''">AND e.site_id = #{siteId}</if>
             <if test="buildingIds != null and buildingIds.size() > 0">
                 AND e.building_id IN

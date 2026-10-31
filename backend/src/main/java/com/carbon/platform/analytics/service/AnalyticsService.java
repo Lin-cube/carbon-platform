@@ -451,13 +451,23 @@ public class AnalyticsService {
                                              List<String> buildingIds, String siteId,
                                              String anomalyType, String severity,
                                              Integer minDuration, int pageNum, int pageSize) {
+        return scanAnomalies(startDate, endDate, buildingIds, siteId, anomalyType, severity,
+                minDuration, null, pageNum, pageSize);
+    }
+
+    /** 带处理状态筛选的异常分页查询（handleStatus 可空） */
+    public Map<String, Object> scanAnomalies(LocalDate startDate, LocalDate endDate,
+                                             List<String> buildingIds, String siteId,
+                                             String anomalyType, String severity,
+                                             Integer minDuration, String handleStatus,
+                                             int pageNum, int pageSize) {
         int offset = Math.max(0, (Math.max(1, pageNum) - 1) * Math.max(1, pageSize));
         int limit = Math.min(Math.max(1, pageSize), 500);
 
         Long total = mapper.countAnomalyEvents(startDate, endDate, buildingIds, siteId,
-                anomalyType, severity, minDuration);
+                anomalyType, severity, minDuration, handleStatus);
         List<Map<String, Object>> events = mapper.selectAnomalyEvents(startDate, endDate, buildingIds,
-                siteId, anomalyType, severity, minDuration, offset, limit);
+                siteId, anomalyType, severity, minDuration, handleStatus, offset, limit);
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("total", total == null ? 0L : total);

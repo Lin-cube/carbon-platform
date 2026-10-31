@@ -11,6 +11,7 @@ public enum ResultCode {
     UNAUTHORIZED(401, "未登录或登录已过期"),
     FORBIDDEN(403, "无权限访问"),
     NOT_FOUND(404, "资源不存在"),
+    CONFLICT(409, "数据已被他人修改，请刷新后重试"),
 
     LOGIN_FAILED(1001, "用户名或密码错误"),
     ACCOUNT_DISABLED(1002, "账号已停用"),

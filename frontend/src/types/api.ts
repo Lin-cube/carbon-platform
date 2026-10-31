@@ -166,6 +166,28 @@ export interface AnomalyEvent {
   anomalyType: string; severity: string | null
   peakValue: number | null; baselineValue: number | null; deviationPct: number | null
   handled: number; handleNote: string | null
+  /** 处置状态：未处理 / 处理中 / 已处理 / 已忽略 / 待复检 */
+  handleStatus?: string | null
+  handleBy?: string | null
+  handleAt?: string | null
+  handleVersion?: number
+}
+
+/** 异常处置历史记录 */
+export interface AnomalyHandleLog {
+  id: number
+  action: string
+  fromStatus: string | null
+  toStatus: string
+  note: string | null
+  operator: string | null
+  createdAt: string
+}
+
+/** 异常处置详情（含历史） */
+export interface AnomalyHandleDetail extends AnomalyEvent {
+  history: AnomalyHandleLog[]
+  allowedStatuses: string[]
 }
 
 export interface Attribution {

@@ -63,6 +63,7 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(AccessDeniedException.class)
+    @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.FORBIDDEN)
     public R<Void> handleAccessDenied(AccessDeniedException e) {
         return R.fail(ResultCode.FORBIDDEN);
     }

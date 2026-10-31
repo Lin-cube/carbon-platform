@@ -90,6 +90,7 @@ public interface AnalyticsMapper {
                                                    @Param("anomalyType") String anomalyType,
                                                    @Param("severity") String severity,
                                                    @Param("minDuration") Integer minDuration,
+                                                   @Param("handleStatus") String handleStatus,
                                                    @Param("offset") int offset,
                                                    @Param("limit") int limit);
 
@@ -105,7 +106,8 @@ public interface AnalyticsMapper {
                             @Param("siteId") String siteId,
                             @Param("anomalyType") String anomalyType,
                             @Param("severity") String severity,
-                            @Param("minDuration") Integer minDuration);
+                            @Param("minDuration") Integer minDuration,
+                            @Param("handleStatus") String handleStatus);
 
     // ================================================================
     // MCP 工具 6 问题诊断：证据链查询
