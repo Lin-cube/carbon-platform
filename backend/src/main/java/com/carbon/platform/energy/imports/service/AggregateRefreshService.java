@@ -152,19 +152,25 @@ public class AggregateRefreshService {
                 "DELETE FROM agg_building_monthly WHERE " + partitionPredicate(from, to)
                         + " AND building_id IN (" + in + ")",
                 concat(partitionParams(from, to, new Object[0]), base));
+        // ★ 必须写入 building_type_cn：按建筑类型的分解查询
+        //   （selectBreakdownByType）依赖本表该字段，缺了会导致
+        //   「建筑类型能耗结构」全部落进 NULL 一个桶，图表显示灰色空环。
         return jdbcTemplate.update("""
                 INSERT INTO agg_building_monthly
-                  (building_id, site_id, stat_year, stat_month, electricity_kwh, hvac_kwh,
-                   water_m3, carbon_kg, cop_avg, air_temp_avg, anomaly_hours, days)
-                SELECT building_id, MAX(site_id), stat_year, stat_month,
-                       SUM(electricity_kwh), SUM(hvac_kwh), SUM(water_m3), SUM(carbon_kg),
-                       AVG(cop), AVG(air_temperature_c),
-                       SUM(CASE WHEN anomaly_flag = 1 THEN 1 ELSE 0 END),
-                       COUNT(DISTINCT stat_date)
-                FROM fact_energy_hourly
+                  (building_id, site_id, building_type_cn, stat_year, stat_month,
+                   electricity_kwh, hvac_kwh, water_m3, carbon_kg, cop_avg,
+                   air_temp_avg, anomaly_hours, days)
+                SELECT f.building_id, MAX(f.site_id), MAX(b.building_type_cn),
+                       f.stat_year, f.stat_month,
+                       SUM(f.electricity_kwh), SUM(f.hvac_kwh), SUM(f.water_m3), SUM(f.carbon_kg),
+                       AVG(f.cop), AVG(f.air_temperature_c),
+                       SUM(CASE WHEN f.anomaly_flag = 1 THEN 1 ELSE 0 END),
+                       COUNT(DISTINCT f.stat_date)
+                FROM fact_energy_hourly f
+                LEFT JOIN dim_building b ON b.building_id = f.building_id
                 WHERE %s
-                  AND building_id IN (%s)
-                GROUP BY building_id, stat_year, stat_month
+                  AND f.building_id IN (%s)
+                GROUP BY f.building_id, f.stat_year, f.stat_month
                 """.formatted(partitionPredicate(from, to), in),
                 concat(partitionParams(from, to, new Object[0]), base));
     }
