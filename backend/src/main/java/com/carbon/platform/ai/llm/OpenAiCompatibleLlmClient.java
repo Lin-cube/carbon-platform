@@ -14,7 +14,14 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * OpenAI 兼容大模型客户端（当前用于 DeepSeek）。
@@ -223,6 +230,122 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
             return result;
         } catch (Exception e) {
             log.error("大模型工具调用失败（将降级）：{}", e.getMessage());
+            return null;
+        }
+    }
+
+    // ================================================================ 流式
+
+    /**
+     * 流式对话：解析 OpenAI 兼容的 SSE 响应，正文逐段回调。
+     *
+     * <p>SSE 每行形如 {@code data: {"choices":[{"delta":{"content":"你"}}]}}，
+     * 结束时为 {@code data: [DONE]}。工具调用通过 {@code delta.tool_calls}
+     * 分片下发，按 {@code index} 累积 id / name / arguments。
+     */
+    @Override
+    public ToolChatResult chatStream(List<Map<String, Object>> messages,
+                                     List<Map<String, Object>> tools,
+                                     int maxTokens,
+                                     Consumer<String> onDelta) {
+        if (!available()) {
+            return null;
+        }
+        ToolChatResult result = new ToolChatResult();
+        try {
+            ObjectNode body = mapper.createObjectNode();
+            body.put("model", model);
+            body.put("temperature", 0.0);
+            body.put("stream", true);
+            body.put("max_tokens", Math.max(maxTokens, 64));
+            body.put("tool_choice", "auto");
+            body.putObject("stream_options").put("include_usage", true);
+            ArrayNode msgs = body.putArray("messages");
+            for (Map<String, Object> m : messages) {
+                msgs.add(mapper.valueToTree(m));
+            }
+            if (tools != null && !tools.isEmpty()) {
+                ArrayNode ta = body.putArray("tools");
+                for (Map<String, Object> t : tools) {
+                    ta.add(mapper.valueToTree(t));
+                }
+            }
+
+            StringBuilder content = new StringBuilder();
+            Map<Integer, ToolChatResult.ToolCall> calls = new LinkedHashMap<>();
+            long t0 = System.currentTimeMillis();
+
+            restTemplate.execute(baseUrl + "/chat/completions", HttpMethod.POST,
+                    req -> {
+                        req.getHeaders().setContentType(MediaType.APPLICATION_JSON);
+                        req.getHeaders().setBearerAuth(apiKey);
+                        req.getHeaders().set("Accept", "text/event-stream");
+                        req.getBody().write(mapper.writeValueAsBytes(body));
+                    },
+                    resp -> {
+                        try (BufferedReader br = new BufferedReader(
+                                new InputStreamReader(resp.getBody(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = br.readLine()) != null) {
+                                if (!line.startsWith("data:")) {
+                                    continue;
+                                }
+                                String data = line.substring(5).trim();
+                                if ("[DONE]".equals(data)) {
+                                    break;
+                                }
+                                JsonNode chunk = mapper.readTree(data);
+
+                                JsonNode usage = chunk.path("usage");
+                                if (usage.isObject()) {
+                                    result.setPromptTokens(usage.path("prompt_tokens").asInt());
+                                    result.setCompletionTokens(usage.path("completion_tokens").asInt());
+                                    result.setTotalTokens(usage.path("total_tokens").asInt());
+                                }
+
+                                JsonNode choices = chunk.path("choices");
+                                if (!choices.isArray() || choices.isEmpty()) {
+                                    continue;
+                                }
+                                JsonNode delta = choices.get(0).path("delta");
+                                String piece = delta.path("content").asText(null);
+                                if (piece != null && !piece.isEmpty()) {
+                                    content.append(piece);
+                                    if (onDelta != null) {
+                                        onDelta.accept(piece);
+                                    }
+                                }
+                                JsonNode tcs = delta.path("tool_calls");
+                                if (tcs.isArray()) {
+                                    for (JsonNode tc : tcs) {
+                                        int i = tc.path("index").asInt(0);
+                                        ToolChatResult.ToolCall call =
+                                                calls.computeIfAbsent(i, k -> new ToolChatResult.ToolCall());
+                                        String id = tc.path("id").asText(null);
+                                        if (id != null && !id.isEmpty()) {
+                                            call.setId(id);
+                                        }
+                                        String name = tc.path("function").path("name").asText(null);
+                                        if (name != null && !name.isEmpty()) {
+                                            call.setName(name);
+                                        }
+                                        String args = tc.path("function").path("arguments").asText(null);
+                                        if (args != null) {
+                                            call.setArguments((call.getArguments() == null ? "" : call.getArguments()) + args);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return null;
+                    });
+
+            result.setContent(content.length() == 0 ? null : content.toString());
+            result.getToolCalls().addAll(calls.values());
+            result.setElapsedMs(System.currentTimeMillis() - t0);
+            return result;
+        } catch (Exception e) {
+            log.error("大模型流式调用失败（将降级）：{}", e.getMessage());
             return null;
         }
     }

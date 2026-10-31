@@ -84,6 +84,29 @@ public class DeepSeekToolCallingService {
     public ChatResponse answer(String sessionId, String question,
                                String siteId, String buildingId,
                                String startDate, String endDate) {
+        return run(sessionId, question, siteId, buildingId, startDate, endDate, false, null, null);
+    }
+
+    /**
+     * 流式版：正文逐段回调 {@code onDelta}，每次工具执行完回调 {@code onTool}。
+     *
+     * <p>与 {@link #answer} 共用同一套编排逻辑，仅模型调用换成 SSE 流式，
+     * 前端可边生成边显示，首字延迟从 2~3 秒降到数百毫秒。
+     */
+    public ChatResponse answerStream(String sessionId, String question,
+                                     String siteId, String buildingId,
+                                     String startDate, String endDate,
+                                     java.util.function.Consumer<String> onDelta,
+                                     java.util.function.Consumer<ChatResponse.ToolCall> onTool) {
+        return run(sessionId, question, siteId, buildingId, startDate, endDate, true, onDelta, onTool);
+    }
+
+    private ChatResponse run(String sessionId, String question,
+                             String siteId, String buildingId,
+                             String startDate, String endDate,
+                             boolean stream,
+                             java.util.function.Consumer<String> onDelta,
+                             java.util.function.Consumer<ChatResponse.ToolCall> onTool) {
         long t0 = System.currentTimeMillis();
         if (!available()) {
             return null;
@@ -125,7 +148,9 @@ public class DeepSeekToolCallingService {
 
         try {
             for (int round = 0; round < MAX_ROUNDS; round++) {
-                ToolChatResult r = llmClient.chatWithTools(messages, tools, 800);
+                ToolChatResult r = stream
+                        ? llmClient.chatStream(messages, tools, 800, onDelta)
+                        : llmClient.chatWithTools(messages, tools, 800);
                 if (r == null) {
                     log.warn("DeepSeek 工具调用返回空，第 {} 轮", round + 1);
                     return null;
@@ -176,6 +201,9 @@ public class DeepSeekToolCallingService {
                                 resultRows(evidence.get(tc.getName())), call.getElapsedMs(),
                                 r.getPromptTokens(), r.getCompletionTokens(), r.getTotalTokens());
                         allCalls.add(call);
+                        if (onTool != null) {
+                            onTool.accept(call);
+                        }
                         messages.add(msg("tool", result, tc.getId(), null));
                     }
                 } else {

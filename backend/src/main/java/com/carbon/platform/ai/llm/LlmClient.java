@@ -62,4 +62,24 @@ public interface LlmClient {
                                           int maxTokens) {
         return null;
     }
+
+    /**
+     * 流式（SSE）工具调用对话。
+     *
+     * <p>与 {@link #chatWithTools} 结果相同，但模型的正文会**逐段回调**
+     * {@code onDelta}，前端可边生成边显示，显著降低首字延迟。
+     *
+     * <p>默认实现退化为非流式：一次性拿到完整内容后回调一次，
+     * 保证所有 LlmClient 实现都能被流式接口调用。
+     */
+    default ToolChatResult chatStream(java.util.List<java.util.Map<String, Object>> messages,
+                                       java.util.List<java.util.Map<String, Object>> tools,
+                                       int maxTokens,
+                                       java.util.function.Consumer<String> onDelta) {
+        ToolChatResult r = chatWithTools(messages, tools, maxTokens);
+        if (r != null && r.getContent() != null && onDelta != null) {
+            onDelta.accept(r.getContent());
+        }
+        return r;
+    }
 }

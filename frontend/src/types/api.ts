@@ -213,6 +213,9 @@ export interface ChatResponse {
   elapsedMs: number | null
   dataSource: string | null
   error: string | null
+  promptTokens?: number
+  completionTokens?: number
+  totalTokens?: number
 }
 
 export interface BuildingRow {

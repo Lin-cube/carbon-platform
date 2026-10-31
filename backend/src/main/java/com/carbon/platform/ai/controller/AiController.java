@@ -12,7 +12,9 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.Map;
 
@@ -90,6 +92,60 @@ public class AiController {
             return R.fail(500, "联网搜索不可用：未配置元宝搜索凭证（YUANBAO_SECRET_ID/KEY 或 YUANBAO_SEARCH_API_KEY）或调用失败");
         }
         return R.ok(result);
+    }
+
+    /** 流式问答线程池：SSE 必须异步写，不能占用 Tomcat 工作线程 */
+    private static final java.util.concurrent.ExecutorService STREAM_POOL =
+            java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
+                Thread t = new Thread(r);
+                t.setDaemon(true);
+                t.setName("ai-stream");
+                return t;
+            });
+
+    /**
+     * 流式问答（SSE）。
+     *
+     * <p>事件类型：
+     * <ul>
+     *   <li>{@code delta} —— 正文增量 {text}</li>
+     *   <li>{@code tool}  —— 某次工具执行完成（ChatResponse.ToolCall）</li>
+     *   <li>{@code done}  —— 完整 ChatResponse（含 toolCalls / dataEvidence / tokens）</li>
+     *   <li>{@code error} —— {message}</li>
+     * </ul>
+     */
+    @Operation(summary = "流式自然语言问答（SSE）")
+    @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @OperLog(title = "AI-问答(流式)", businessType = OperLog.BusinessType.QUERY)
+    public SseEmitter chatStream(@RequestBody ChatRequest request) {
+        SseEmitter emitter = new SseEmitter(180_000L);
+        STREAM_POOL.execute(() -> {
+            try {
+                ChatResponse resp = aiServiceClient.chatStream(
+                        request,
+                        delta -> sendEvent(emitter, "delta", java.util.Map.of("text", delta)),
+                        tool -> sendEvent(emitter, "tool", tool));
+                sendEvent(emitter, "done", resp);
+                emitter.complete();
+            } catch (Exception e) {
+                try {
+                    sendEvent(emitter, "error",
+                            java.util.Map.of("message", String.valueOf(e.getMessage())));
+                } catch (Exception ignore) {
+                    // 客户端可能已断开
+                }
+                emitter.complete();
+            }
+        });
+        return emitter;
+    }
+
+    private void sendEvent(SseEmitter emitter, String name, Object data) {
+        try {
+            emitter.send(SseEmitter.event().name(name).data(data, MediaType.APPLICATION_JSON));
+        } catch (Exception ignore) {
+            // 连接已断开，忽略
+        }
     }
 
     @Operation(summary = "AI 服务健康状态（看板指示灯）")

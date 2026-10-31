@@ -4,6 +4,7 @@ import com.carbon.platform.ai.dto.ChatRequest;
 import com.carbon.platform.ai.service.DeepSeekToolCallingService;
 import com.carbon.platform.ai.search.YuanbaoSearchService;
 import com.carbon.platform.ai.service.DashboardInsightService;
+import com.carbon.platform.ai.tool.AiToolSchema;
 import com.carbon.platform.ai.dto.DiagnoseRequest;
 import com.carbon.platform.ai.dto.ReportRequest;
 import com.carbon.platform.ai.dto.ChatResponse;
@@ -57,6 +58,7 @@ public class HybridAiServiceClient implements AiServiceClient {
     private final DeepSeekToolCallingService toolCalling;
     private final YuanbaoSearchService yuanbaoSearch;
     private final DashboardInsightService dashboardInsightService;
+    private final AiToolSchema aiToolSchema;
 
     /** 知识类问题的特征词。命中任一即判定为知识类，路由到 RAG。 */
     private static final List<String> KNOWLEDGE_MARKERS = List.of(
@@ -101,6 +103,7 @@ public class HybridAiServiceClient implements AiServiceClient {
             DeepSeekToolCallingService toolCalling,
             YuanbaoSearchService yuanbaoSearch,
             DashboardInsightService dashboardInsightService,
+            AiToolSchema aiToolSchema,
             @Value("${carbon.ai.base-url:http://127.0.0.1:8000}") String baseUrl,
             @Value("${carbon.ai.connect-timeout-ms:3000}") int connectTimeout,
             @Value("${carbon.ai.read-timeout-ms:60000}") int readTimeout) {
@@ -108,6 +111,7 @@ public class HybridAiServiceClient implements AiServiceClient {
         this.toolCalling = toolCalling;
         this.yuanbaoSearch = yuanbaoSearch;
         this.dashboardInsightService = dashboardInsightService;
+        this.aiToolSchema = aiToolSchema;
         // 手工构造而非注入：HttpAiServiceClient 带 @ConditionalOnProperty(mode=http)，
         // 在 hybrid 模式下不会被注册，但本类需要复用它。
         this.ragEngine = new HttpAiServiceClient(baseUrl, connectTimeout, readTimeout);
@@ -329,17 +333,68 @@ public class HybridAiServiceClient implements AiServiceClient {
     }
 
     @Override
+    public ChatResponse chatStream(ChatRequest request,
+                                   java.util.function.Consumer<String> onDelta,
+                                   java.util.function.Consumer<ChatResponse.ToolCall> onTool) {
+        // 知识类 / 兜底路径本身不是流式，走原逻辑后一次性回调
+        if (isKnowledge(request.getQuestion())) {
+            ChatResponse r = chat(request);
+            if (r != null && r.getAnswer() != null && onDelta != null) {
+                onDelta.accept(r.getAnswer());
+            }
+            return r;
+        }
+        // 数据类问题：DeepSeek 工具调用 + 流式正文
+        ChatResponse tc = toolCalling.answerStream(
+                request.getSessionId(), request.getQuestion(),
+                siteId(request), request.getBuildingId(),
+                request.getStartDate(), request.getEndDate(), onDelta, onTool);
+        if (tc != null && tc.getAnswer() != null && !tc.getAnswer().isBlank()) {
+            return tc;
+        }
+        log.warn("DeepSeek 流式调用不可用，降级本地统计引擎：{}", request.getQuestion());
+        ChatResponse local = localEngine.chat(request);
+        if (local != null && local.getAnswer() != null && onDelta != null) {
+            onDelta.accept(local.getAnswer());
+        }
+        return local;
+    }
+
+    @Override
     public Map<String, Object> listTools() {
         Map<String, Object> m = new java.util.LinkedHashMap<>();
         Map<String, Object> local = localEngine.listTools();
         Map<String, Object> rag = ragEngine.listTools();
+
+        // ★ 主清单 = 大模型真正能调用的工具（与 /ai/tools/schema 同源），
+        //   避免出现 /ai/tools 报 7 个、/ai/tools/schema 报 12 个的口径不一致。
+        java.util.List<Map<String, Object>> callable = new java.util.ArrayList<>();
+        for (Map<String, Object> def : aiToolSchema.toolDefinitions()) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> fn = (Map<String, Object>) def.get("function");
+            Map<String, Object> item = new java.util.LinkedHashMap<>();
+            item.put("name", fn.get("name"));
+            item.put("desc", fn.get("description"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> params = (Map<String, Object>) fn.get("parameters");
+            item.put("params", params.get("required"));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> props = (Map<String, Object>) params.get("properties");
+            item.put("properties", new java.util.ArrayList<>(props.keySet()));
+            callable.add(item);
+        }
+
         m.put("mode", "hybrid");
-        m.put("localTools", local.get("tools"));
-        m.put("ragTools", rag.get("tools"));
-        m.put("localCount", local.get("count"));
+        m.put("count", callable.size());
+        m.put("tools", callable);
+        // 申报表口径的 7 类 MCP 工具保留为辅：它们是契约描述，不是当前实际调用面
+        Map<String, Object> legacy = new java.util.LinkedHashMap<>();
+        legacy.put("count", local.get("count"));
+        legacy.put("tools", local.get("tools"));
+        legacy.put("note", "申报表约定的 7 类 MCP 工具（概念口径）；"
+                + "当前实际可调用的是上面 tools 中的 " + callable.size() + " 个");
+        m.put("legacyMcp", legacy);
         m.put("ragCount", rag.get("count"));
-        m.put("tools", local.get("tools"));   // 7 类数据工具为契约中的主体
-        m.put("count", local.get("count"));
         return m;
     }
 

@@ -173,10 +173,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Delete, Promotion, DocumentCopy } from '@element-plus/icons-vue'
 import { aiApi, energyApi } from '@/api'
+import { getToken } from '@/api/request'
 import { renderMarkdown } from '@/utils/markdown'
 import { useAppStore } from '@/stores/app'
 import type { BuildingRow, ChatResponse } from '@/types/api'
@@ -308,6 +309,29 @@ async function loadStatus() {
   }
 }
 
+/** 解析单个 SSE 事件块 */
+function parseSse(block: string): { event: string; data: any } | null {
+  let event = 'message'
+  const dataLines: string[] = []
+  for (const line of block.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice(6).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+  }
+  if (!dataLines.length) return null
+  try {
+    return { event, data: JSON.parse(dataLines.join('\n')) }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 发送提问（流式）。
+ *
+ * 走 POST /api/ai/chat/stream（SSE）：正文边生成边追加，
+ * 工具执行完立即展示工具卡，done 事件带回完整元数据。
+ * 失败时降级为提示文案，不影响后续提问。
+ */
 async function send() {
   const q = question.value.trim()
   if (!q || sending.value) return
@@ -316,33 +340,86 @@ async function send() {
   lastQuestion.value = q
   question.value = ''
   sending.value = true
+
+  // 先插入空的助手消息，流式往里追加；res 先给一个骨架，便于工具卡实时显示
+  const item = reactive<ChatItem>({
+    role: 'assistant',
+    text: '',
+    res: {
+      ok: true,
+      answer: '',
+      citations: [],
+      toolCalls: [],
+      dataEvidence: {},
+      confidence: null,
+      elapsedMs: 0,
+      dataSource: null,
+      error: null
+    }
+  })
+  messages.value.push(item)
+  scrollToBottom()
+
   try {
-    const res = await aiApi.chat({
-      question: q,
-      sessionId: sessionId.value,
-      buildingId: ctxBuildingId.value || undefined,
-      startDate: ctxRange.value?.[0] || undefined,
-      endDate: ctxRange.value?.[1] || undefined
-    })
-    if (res.ok) {
-      push({ role: 'assistant', text: res.answer || '（空回答）', res })
-    } else {
-      push({
-        role: 'assistant',
-        text: res.error || '本次提问未能得到结果，请调整问题或稍后重试。',
-        res,
-        error: 'failed'
+    const token = getToken()
+    const resp = await fetch('/api/ai/chat/stream', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({
+        question: q,
+        sessionId: sessionId.value,
+        buildingId: ctxBuildingId.value || undefined,
+        startDate: ctxRange.value?.[0] || undefined,
+        endDate: ctxRange.value?.[1] || undefined
       })
-      ElMessage.warning('本次提问返回失败状态')
+    })
+    if (!resp.ok || !resp.body) {
+      throw new Error(`HTTP ${resp.status}`)
+    }
+
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const blocks = buffer.split('\n\n')
+      buffer = blocks.pop() || ''
+      for (const block of blocks) {
+        const evt = parseSse(block)
+        if (!evt) continue
+        if (evt.event === 'delta') {
+          item.text += String(evt.data?.text || '')
+        } else if (evt.event === 'tool') {
+          if (item.res) item.res.toolCalls.push(evt.data)
+        } else if (evt.event === 'done') {
+          const full = evt.data as ChatResponse
+          if (full) {
+            item.res = full
+            if (!item.text) item.text = full.answer || ''
+          }
+        } else if (evt.event === 'error') {
+          item.text = String(evt.data?.message || '生成失败')
+          item.error = 'failed'
+        }
+        scrollToBottom()
+      }
+    }
+    if (!item.text.trim()) {
+      item.text = '（空回答）'
     }
   } catch {
-    push({ role: 'assistant', text: '请求失败：后端未能返回结果，请检查服务状态或稍后重试。', error: 'failed' })
+    item.text = '请求失败：后端未能返回结果，请检查服务状态或稍后重试。'
+    item.error = 'failed'
   } finally {
     sending.value = false
     scrollToBottom()
   }
 }
-
 onMounted(async () => {
   try {
     buildings.value = await energyApi.buildings({ limit: 500 })

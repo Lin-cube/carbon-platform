@@ -31,6 +31,22 @@ public interface AiServiceClient {
     /** 列出 AI 侧可用的 MCP 工具 */
     Map<String, Object> listTools();
 
+    /**
+     * 流式问答：正文逐段回调 {@code onDelta}，工具执行完回调 {@code onTool}。
+     *
+     * <p>默认实现退化为「一次性拿到完整答案后回调一次」，
+     * 保证非流式实现（mock / http）也能被流式接口复用。
+     */
+    default ChatResponse chatStream(ChatRequest request,
+                                    java.util.function.Consumer<String> onDelta,
+                                    java.util.function.Consumer<ChatResponse.ToolCall> onTool) {
+        ChatResponse r = chat(request);
+        if (r != null && r.getAnswer() != null && onDelta != null) {
+            onDelta.accept(r.getAnswer());
+        }
+        return r;
+    }
+
     /** 健康检查：返回服务状态，供看板"AI 服务"指示灯使用 */
     Map<String, Object> health();
 
