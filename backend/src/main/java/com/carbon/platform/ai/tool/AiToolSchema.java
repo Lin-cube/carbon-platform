@@ -89,6 +89,20 @@ public class AiToolSchema {
                 List.of("buildingId", "startDate", "endDate")));
 
         tools.add(fn(
+                "simulateEnergySaving", "【理论测算】节能潜力情景模拟。支持两类情景：REDUCE_RATIO（可调时段能耗按比例下降）、COP_IMPROVE（制冷负荷不变、COP 提升）。返回基准电量、理论节约电量、碳减排、以及数据不足原因。结果为理论潜力，**不代表已实现节能效果**；平台无电价数据时电费项返回数据不足。",
+                List.of(
+                        p("buildingId", "string", "建筑编号"),
+                        p("startDate", "string", "开始日期，YYYY-MM-DD"),
+                        p("endDate", "string", "结束日期，YYYY-MM-DD"),
+                        p("scenario", "string", "情景：REDUCE_RATIO 或 COP_IMPROVE"),
+                        p("reduceRatio", "number", "REDUCE_RATIO 时的节能比例，0~0.9，如 0.1 表示降 10%"),
+                        p("hourStart", "integer", "REDUCE_RATIO 的起始小时 0~23，默认 0"),
+                        p("hourEnd", "integer", "REDUCE_RATIO 的结束小时 0~23，默认 23"),
+                        p("copImproveRatio", "number", "COP_IMPROVE 时的 COP 提升比例，0~0.5"),
+                        p("unitPrice", "number", "电价 元/kWh，可选；不提供则电费项为数据不足")),
+                List.of("buildingId", "startDate", "endDate", "scenario")));
+
+        tools.add(fn(
                 "getAnomalyHandleHistory", "【只读】查询历史「已处理/已忽略」的真实处置案例，返回处理状态、处理人、处理时间与处理备注。用于回答「类似异常以前怎么处理的」「有没有处置经验可参考」。本工具不能修改任何数据；AI 无权把异常标记为已处理。",
                 List.of(
                         p("buildingId", "string", "建筑编号，可空表示不限建筑"),

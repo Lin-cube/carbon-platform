@@ -69,6 +69,8 @@ public class AiQueryToolService {
     private final AnalyticsService analyticsService;
     /** 历史处置案例（只读） */
     private final com.carbon.platform.analytics.service.AnomalyHandleService anomalyHandleService;
+    /** 节能情景模拟（只读分析，不写真实统计） */
+    private final com.carbon.platform.analytics.saving.service.SavingSimulationService savingSimulationService;
     private final EnergyQueryService energyQueryService;
     private final EnergyQueryMapper energyQueryMapper;
     private final AnalyticsMapper analyticsMapper;
@@ -94,6 +96,7 @@ public class AiQueryToolService {
                     buildingCop(str(a, "buildingId"), str(a, "startDate"), str(a, "endDate"));
             case "getBuildingAnomalies" ->
                     buildingAnomalies(str(a, "buildingId"), str(a, "startDate"), str(a, "endDate"), intArg(a, "limit", DEFAULT_LIMIT));
+            case "simulateEnergySaving" -> simulateEnergySaving(a);
             case "getAnomalyHandleHistory" ->
                     anomalyHandleHistory(str(a, "buildingId"), str(a, "anomalyType"),
                             intArg(a, "limit", 5));
@@ -252,6 +255,53 @@ public class AiQueryToolService {
         out.put("avgDurationHours", an.getAvgDurationHours());
         out.put("maxDurationHours", an.getMaxDurationHours());
         out.put("events", scan.get("events"));
+        return out;
+    }
+
+    /**
+     * ⑯ 节能情景模拟（理论测算，只读分析）。
+     *
+     * <p>AI 侧的模拟不落库（save=false），避免把对话里的试探性测算写成正式记录。
+     */
+    public Map<String, Object> simulateEnergySaving(Map<String, Object> args) {
+        var req = new com.carbon.platform.analytics.saving.dto.SavingSimulationRequest();
+        req.setBuildingId(str(args, "buildingId"));
+        req.setStartDate(str(args, "startDate"));
+        req.setEndDate(str(args, "endDate"));
+        req.setScenario(str(args, "scenario"));
+        Object rr = args.get("reduceRatio");
+        if (rr instanceof Number n) {
+            req.setReduceRatio(n.doubleValue());
+        }
+        Object ch = args.get("hourStart");
+        if (ch instanceof Number n) {
+            req.setHourStart(n.intValue());
+        }
+        Object ce = args.get("hourEnd");
+        if (ce instanceof Number n) {
+            req.setHourEnd(n.intValue());
+        }
+        Object cr = args.get("copImproveRatio");
+        if (cr instanceof Number n) {
+            req.setCopImproveRatio(n.doubleValue());
+        }
+        Object up = args.get("unitPrice");
+        if (up instanceof Number n) {
+            req.setUnitPrice(n.doubleValue());
+        }
+        req.setSave(false);
+
+        var vo = savingSimulationService.simulate(req);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("scenario", vo.getScenario());
+        out.put("scenarioName", vo.getScenarioName());
+        out.put("sufficient", vo.isSufficient());
+        out.put("insufficiencyReason", vo.getInsufficiencyReason());
+        out.put("params", vo.getParams());
+        out.put("baseline", vo.getBaseline());
+        out.put("result", vo.getResult());
+        out.put("insufficient", vo.getInsufficient());
+        out.put("disclaimer", "模拟结果为理论节能潜力，不是已实现的节能效果；方案落地需运维人员人工审核。");
         return out;
     }
 

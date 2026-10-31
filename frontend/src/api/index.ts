@@ -4,7 +4,7 @@ import type {
   DimensionVO, OverviewVO, BreakdownVO, EnergyQueryRequest, TimeSeriesVO,
   PeriodSummaryVO, CopAnalysisVO, AnomalyAnalysisVO, DiagnoseResult,
   SuggestResult, ChatResponse, BuildingRow, SiteRow, AiReport,
-  AnomalyHandleDetail, AnomalyHandleLog
+  AnomalyHandleDetail, AnomalyHandleLog, SavingSimulationVO
 } from '@/types/api'
 
 // ---------------------------------------------------------------- 认证
@@ -68,6 +68,28 @@ export const analyticsApi = {
     startDate: string; endDate: string; siteId?: string
     buildingType?: string; periodType?: string
   }, filename: string) => download('/analytics/report/export', params, filename)
+}
+
+/**
+ * 节能情景模拟接口。
+ *
+ * 结果写入独立的 energy_saving_simulation 表，不覆盖任何真实统计指标。
+ */
+export const savingApi = {
+  simulate: (data: {
+    buildingId: string; startDate: string; endDate: string; scenario: string
+    reduceRatio?: number; hourStart?: number; hourEnd?: number
+    copImproveRatio?: number; unitPrice?: number; save?: boolean
+  }) => request<SavingSimulationVO>({ url: '/analytics/saving/simulate', method: 'post', data }),
+
+  get: (id: number) => request<SavingSimulationVO>({ url: `/analytics/saving/${id}`, method: 'get' }),
+
+  list: (params: { buildingId?: string; limit?: number }) =>
+    request<SavingSimulationVO[]>({ url: '/analytics/saving/list', method: 'get', params }),
+
+  explain: (id: number) =>
+    request<{ narrative: string; mode: string }>(
+      { url: `/analytics/saving/${id}/explain`, method: 'post' })
 }
 
 /**

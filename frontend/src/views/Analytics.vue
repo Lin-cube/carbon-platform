@@ -305,6 +305,146 @@
                   description="暂无异常建筑数据" :image-size="72" />
       </div>
     </section>
+
+      <!-- ============================================================ 节能情景模拟 -->
+      <section v-show="activeTab === 'saving'" class="mt-12">
+        <div class="page-card">
+          <div class="chart-title">
+            节能情景模拟 <span class="src-badge src-derived">理论测算</span>
+            <span class="text-dim" style="font-weight: 400">· 基于真实历史数据的确定性推算，不改动任何真实统计</span>
+          </div>
+          <el-alert type="warning" :closable="false" show-icon class="mb-12"
+                    title="模拟结果为理论节能潜力，不是已实现的节能效果；方案落地需运维人员人工审核。" />
+
+          <div class="filter-bar">
+            <span class="text-dim">建筑</span>
+            <el-select v-model="savingBuildingId" filterable placeholder="选择建筑" style="width: 250px">
+              <el-option v-for="b in buildings" :key="b.buildingId"
+                         :label="`${b.buildingId}（${b.buildingTypeCn || '未知'}）`"
+                         :value="b.buildingId" />
+            </el-select>
+            <span class="text-dim">情景</span>
+            <el-radio-group v-model="savingScenario" size="small">
+              <el-radio-button label="REDUCE_RATIO">可调时段降比例</el-radio-button>
+              <el-radio-button label="COP_IMPROVE">制冷 COP 改善</el-radio-button>
+            </el-radio-group>
+          </div>
+
+          <div class="filter-bar">
+            <template v-if="savingScenario === 'REDUCE_RATIO'">
+              <span class="text-dim">节能比例</span>
+              <el-input-number v-model="savingRatio" :min="0" :max="90" :step="5"
+                               controls-position="right" style="width: 120px" />
+              <span class="text-dim">%</span>
+              <span class="text-dim">生效时段</span>
+              <el-input-number v-model="savingHourStart" :min="0" :max="23"
+                               controls-position="right" style="width: 96px" />
+              <span class="text-dim">~</span>
+              <el-input-number v-model="savingHourEnd" :min="0" :max="23"
+                               controls-position="right" style="width: 96px" />
+              <span class="text-dim">时</span>
+            </template>
+            <template v-else>
+              <span class="text-dim">COP 提升</span>
+              <el-input-number v-model="savingCopRatio" :min="0" :max="50" :step="5"
+                               controls-position="right" style="width: 120px" />
+              <span class="text-dim">%（制冷负荷不变前提下）</span>
+            </template>
+
+            <span class="text-dim">电价(可选)</span>
+            <el-input-number v-model="savingPrice" :min="0" :max="5" :step="0.05" :precision="2"
+                             controls-position="right" style="width: 120px" placeholder="元/kWh" />
+
+            <div class="filter-actions">
+              <el-button type="primary" :icon="Search" :loading="savingLoading"
+                         :disabled="!savingBuildingId" @click="runSaving">测算</el-button>
+            </div>
+          </div>
+
+          <template v-if="savingResult">
+            <el-alert v-if="!savingResult.sufficient" type="info" :closable="false" show-icon
+                      class="mt-12" :title="savingResult.insufficiencyReason || '数据不足，无法测算'" />
+
+            <template v-else>
+              <div class="kpi-row mt-12">
+                <div class="kpi-card">
+                  <div class="kpi-label">基准电量</div>
+                  <div class="kpi-value">{{ fmtNum(savingScopeBaseline) }}<span class="kpi-unit">kWh</span></div>
+                  <div class="kpi-sub">{{ savingScenario === 'REDUCE_RATIO' ? '所选时段真实用电' : '空调分项真实用电' }}</div>
+                </div>
+                <div class="kpi-card">
+                  <div class="kpi-label">理论节约</div>
+                  <div class="kpi-value">{{ fmtNum(savingResult.result.savedKwh) }}<span class="kpi-unit">kWh</span></div>
+                  <div class="kpi-sub">占全楼 {{ savingResult.result.savedRatioOfTotal ?? '--' }}%</div>
+                </div>
+                <div class="kpi-card">
+                  <div class="kpi-label">模拟后电量</div>
+                  <div class="kpi-value">{{ fmtNum(savingScopeSimulated) }}<span class="kpi-unit">kWh</span></div>
+                  <div class="kpi-sub">同口径对比</div>
+                </div>
+                <div class="kpi-card">
+                  <div class="kpi-label">碳减排</div>
+                  <div class="kpi-value">{{ fmtNum(savingResult.result.carbonSavedKg) }}<span class="kpi-unit">kg</span></div>
+                  <div class="kpi-sub">因子 0.5810 kgCO₂/kWh</div>
+                </div>
+                <div class="kpi-card">
+                  <div class="kpi-label">电费节约</div>
+                  <div class="kpi-value">
+                    {{ savingResult.result.costSaved != null ? fmtNum(savingResult.result.costSaved) : '数据不足' }}
+                    <span v-if="savingResult.result.costSaved != null" class="kpi-unit">元</span>
+                  </div>
+                  <div class="kpi-sub">{{ savingResult.result.costBasis }}</div>
+                </div>
+              </div>
+
+              <div class="grid-2 mt-12">
+                <div class="chart-box">
+                  <div class="chart-title">基准 vs 模拟</div>
+                  <EChart :option="savingOption" height="260px" />
+                </div>
+                <div class="chart-box">
+                  <div class="chart-title">计算依据</div>
+                  <el-descriptions :column="1" border size="small">
+                    <el-descriptions-item label="公式">{{ savingResult.basis.formula }}</el-descriptions-item>
+                    <el-descriptions-item v-if="savingResult.basis.copNote" label="COP 口径">
+                      {{ savingResult.basis.copNote }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="碳排因子">{{ savingResult.basis.carbonFactorNote }}</el-descriptions-item>
+                    <el-descriptions-item label="数据来源">{{ savingResult.basis.dataSource }}</el-descriptions-item>
+                    <el-descriptions-item label="电费口径">{{ savingResult.basis.costNote }}</el-descriptions-item>
+                  </el-descriptions>
+                </div>
+              </div>
+
+              <div class="mt-12">
+                <div class="chart-title">
+                  AI 解释
+                  <el-tag v-if="savingResult.aiMode" size="small" effect="plain"
+                          :type="savingResult.aiMode === 'llm' ? 'success' : 'info'">
+                    {{ savingResult.aiMode === 'llm' ? '大模型生成' : '模板生成' }}
+                  </el-tag>
+                  <el-button size="small" :loading="savingExplaining" style="margin-left: 8px"
+                             @click="explainSaving">
+                    {{ savingResult.aiNarrative ? '重新生成' : '生成解释' }}
+                  </el-button>
+                </div>
+                <div v-if="savingResult.aiNarrative" class="ai-save-text">
+                  {{ savingResult.aiNarrative }}
+                </div>
+                <el-empty v-else description="点击「生成解释」由 AI 说明事实 / 假设 / 潜力 / 风险"
+                          :image-size="56" />
+              </div>
+
+              <div v-if="savingResult.insufficient?.length" class="text-dim mt-12" style="font-size: 12px">
+                数据不足项：
+                <span v-for="(x, i) in savingResult.insufficient" :key="i">
+                  {{ x.metric }}（{{ x.reason }}）<span v-if="i < savingResult.insufficient.length - 1">；</span>
+                </span>
+              </div>
+            </template>
+          </template>
+        </div>
+      </section>
   </div>
 </template>
 
@@ -314,12 +454,12 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, Download, Search } from '@element-plus/icons-vue'
 import EChart from '@/components/EChart.vue'
-import { analyticsApi, energyApi } from '@/api'
+import { analyticsApi, energyApi, savingApi } from '@/api'
 import { useDataVersionRefresh } from '@/composables/useDataVersionRefresh'
 import { useAppStore } from '@/stores/app'
 import { fmtNum, fmtInt, type EChartsOption } from '@/utils/echarts'
 import type {
-  AnomalyAnalysisVO, BuildingRow, CopAnalysisVO, PeriodSummaryVO, SiteRow
+  AnomalyAnalysisVO, BuildingRow, CopAnalysisVO, PeriodSummaryVO, SiteRow, SavingSimulationVO
 } from '@/types/api'
 
 const app = useAppStore()
@@ -337,10 +477,104 @@ const period = ref<PeriodSummaryVO | null>(null)
 const cop = ref<CopAnalysisVO | null>(null)
 const anomaly = ref<AnomalyAnalysisVO | null>(null)
 
+// ── 节能情景模拟 ──
+const savingBuildingId = ref('')
+const savingScenario = ref<'REDUCE_RATIO' | 'COP_IMPROVE'>('REDUCE_RATIO')
+const savingRatio = ref(10)
+const savingHourStart = ref(18)
+const savingHourEnd = ref(23)
+const savingCopRatio = ref(15)
+const savingPrice = ref<number | undefined>(undefined)
+const savingLoading = ref(false)
+const savingExplaining = ref(false)
+const savingResult = ref<SavingSimulationVO | null>(null)
+
+/** 被影响口径的基准电量（比例情景=时段电量；COP 情景=空调分项电量） */
+const savingScopeBaseline = computed(() => {
+  const r = savingResult.value
+  if (!r) return 0
+  return Number(r.scenario === 'REDUCE_RATIO'
+    ? r.baseline?.windowElectricityKwh
+    : r.baseline?.hvacElectricityKwh) || 0
+})
+const savingScopeSimulated = computed(() => {
+  const r = savingResult.value
+  if (!r) return 0
+  return Number(r.scenario === 'REDUCE_RATIO'
+    ? r.result?.simulatedWindowKwh
+    : r.result?.simulatedHvacKwh) || 0
+})
+
+const savingOption = computed<EChartsOption>(() => ({
+  tooltip: {
+    trigger: 'axis', axisPointer: { type: 'shadow' },
+    valueFormatter: (v: any) => fmtNum(Number(v)) + ' kWh'
+  },
+  grid: { left: 70, right: 20, top: 30, bottom: 30 },
+  xAxis: { type: 'category', data: ['基准', '模拟后'] },
+  yAxis: { type: 'value', axisLabel: { formatter: (v: number) => fmtNum(v, 0) } },
+  series: [{
+    type: 'bar',
+    barMaxWidth: 64,
+    data: [
+      { value: savingScopeBaseline.value, itemStyle: { color: '#8FBFA9' } },
+      { value: savingScopeSimulated.value, itemStyle: { color: '#35866B' } }
+    ],
+    label: { show: true, position: 'top', fontSize: 11, formatter: (p: any) => fmtNum(p.value) }
+  }]
+}))
+
+async function runSaving() {
+  if (!savingBuildingId.value) {
+    ElMessage.warning('请先选择建筑')
+    return
+  }
+  savingLoading.value = true
+  try {
+    savingResult.value = await savingApi.simulate({
+      buildingId: savingBuildingId.value,
+      startDate: app.startDate,
+      endDate: app.endDate,
+      scenario: savingScenario.value,
+      reduceRatio: savingScenario.value === 'REDUCE_RATIO' ? savingRatio.value / 100 : undefined,
+      hourStart: savingScenario.value === 'REDUCE_RATIO' ? savingHourStart.value : undefined,
+      hourEnd: savingScenario.value === 'REDUCE_RATIO' ? savingHourEnd.value : undefined,
+      copImproveRatio: savingScenario.value === 'COP_IMPROVE' ? savingCopRatio.value / 100 : undefined,
+      unitPrice: savingPrice.value || undefined
+    })
+  } catch (e: any) {
+    ElMessage.error(e?.message || '测算失败')
+    savingResult.value = null
+  } finally {
+    savingLoading.value = false
+  }
+}
+
+async function explainSaving() {
+  const id = savingResult.value?.id
+  if (!id) {
+    ElMessage.warning('模拟记录未保存，无法生成 AI 解释')
+    return
+  }
+  savingExplaining.value = true
+  try {
+    const r = await savingApi.explain(id)
+    if (savingResult.value) {
+      savingResult.value.aiNarrative = r.narrative
+      savingResult.value.aiMode = r.mode
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || 'AI 解释生成失败')
+  } finally {
+    savingExplaining.value = false
+  }
+}
+
 const tabList = [
   { name: 'period', label: '时段汇总' },
   { name: 'cop', label: 'COP 计算' },
-  { name: 'anomaly', label: '异常分析' }
+  { name: 'anomaly', label: '异常分析' },
+  { name: 'saving', label: '节能模拟' }
 ]
 
 /**
@@ -740,4 +974,15 @@ onMounted(async () => {
 
 :deep(.el-table .cell) { font-variant-numeric: tabular-nums; }
 :deep(.kpi-row) { margin-top: 4px; }
+
+.ai-save-text {
+  white-space: pre-wrap;
+  line-height: 1.85;
+  font-size: 13px;
+  color: var(--carbon-text, #253D35);
+  background: #f6faf8;
+  border: 1px solid #e3efe8;
+  border-radius: 10px;
+  padding: 12px 14px;
+}
 </style>

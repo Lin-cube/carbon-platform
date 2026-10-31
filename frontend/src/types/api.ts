@@ -251,3 +251,23 @@ export interface SiteRow {
   siteId: string; buildingCount: number
   electricityKwhYear: number | null; carbonKgYear: number | null; typeCount: number
 }
+
+/** 节能情景模拟结果 */
+export interface SavingSimulationVO {
+  id?: number
+  scenario: string
+  scenarioName: string
+  buildingId: string
+  siteId?: string | null
+  startDate: string
+  endDate: string
+  sufficient: boolean
+  insufficiencyReason?: string | null
+  params: Record<string, any>
+  baseline: Record<string, any>
+  result: Record<string, any>
+  insufficient?: { metric: string; reason: string }[]
+  basis: Record<string, any>
+  aiNarrative?: string | null
+  aiMode?: string | null
+}
