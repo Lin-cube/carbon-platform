@@ -315,6 +315,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Download, Search } from '@element-plus/icons-vue'
 import EChart from '@/components/EChart.vue'
 import { analyticsApi, energyApi } from '@/api'
+import { useDataVersionRefresh } from '@/composables/useDataVersionRefresh'
 import { useAppStore } from '@/stores/app'
 import { fmtNum, fmtInt, type EChartsOption } from '@/utils/echarts'
 import type {
@@ -647,6 +648,13 @@ async function onExport() {
     ElMessage.error('报表导出失败')
   }
 }
+
+// 导入新数据后按当前标签页重新加载
+useDataVersionRefresh(async () => {
+  await loadPeriod()
+  if (activeTab.value === 'cop' && copBuildingId.value) await loadCop()
+  if (activeTab.value === 'anomaly') await loadAnomaly()
+})
 
 onMounted(async () => {
   try {

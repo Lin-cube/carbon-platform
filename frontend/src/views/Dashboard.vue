@@ -200,6 +200,7 @@ import { Refresh, Download } from '@element-plus/icons-vue'
 import EChart from '@/components/EChart.vue'
 import AiInsight from '@/components/AiInsight.vue'
 import { energyApi, analyticsApi, aiApi } from '@/api'
+import { useDataVersionRefresh } from '@/composables/useDataVersionRefresh'
 import { useAppStore } from '@/stores/app'
 import { fmtNum, fmtInt, type EChartsOption } from '@/utils/echarts'
 import type {
@@ -497,6 +498,9 @@ async function onExport() {
     ElMessage.error('报表导出失败')
   }
 }
+
+// 导入新数据后（keep-alive 缓存场景）重新拉取看板数据
+useDataVersionRefresh(() => loadAll())
 
 onMounted(async () => {
   try {

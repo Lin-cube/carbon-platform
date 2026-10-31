@@ -312,6 +312,7 @@ import {
   footprintOf, type BuildingModel,
 } from '@/three/buildingModel'
 import type { BuildingRow, SiteRow } from '@/types/api'
+import { useDataVersionRefresh } from '@/composables/useDataVersionRefresh'
 
 const router = useRouter()
 const app = useAppStore()
@@ -1102,6 +1103,56 @@ function stepColorTween(now: number): boolean {
   return true
 }
 
+/**
+ * 单次请求的建筑条数上限（后端 max-page-size=500）。
+ * 只用于「知道真实有多少栋」，不等于渲染上限。
+ */
+const BUILDING_LIMIT = 500
+
+/**
+ * 渲染上限：每栋建筑约 3~4 个 draw call（主体 + 强调条 + 光环 + 窗户实例），
+ * 300 栋约 1k draw call，是当前质量档位下的可接受上限。
+ * 超过则按年用电量降序取前 N 栋并提示，避免无条件加载无限建筑。
+ */
+const RENDER_CAP = 300
+
+/** 把建筑列表写入状态并重算园区统计（不发请求、不碰 Three.js） */
+function applyBuildingList(list: BuildingRow[]) {
+  buildings.value = list
+  blobs.value = list
+
+  siteStat.electricity = list.reduce((s, b) => s + (b.electricityKwhYear || 0), 0)
+  siteStat.carbon = list.reduce((s, b) => s + (b.electricityKwhYear || 0) * 0.581, 0)
+  siteStat.anomalyCount = list.filter((b) => (b.anomalyRate ?? 0) > 0.05).length
+
+  const grades = list.map((b) => b.energyGrade).filter((g): g is string => !!g && g !== '未评级')
+  const order = ['A', 'B', 'C', 'D', 'E']
+  siteStat.avgGrade = grades.length
+    ? order[Math.round(grades.reduce((s, g) => s + order.indexOf(g), 0) / grades.length)] || '--'
+    : '--'
+
+  // 刷新后把选中项换成新对象，避免详情抽屉停留在旧评级/旧用电量
+  if (selected.value) {
+    const hit = list.find((b) => b.buildingId === selected.value!.buildingId)
+    selected.value = hit ?? null
+  }
+}
+
+/** 拉取当前园区建筑，并施加渲染上限保护 */
+async function fetchBuildings(): Promise<BuildingRow[]> {
+  const list = await energyApi.buildings({ siteId: siteId.value, limit: BUILDING_LIMIT })
+  const capped = list.length >= BUILDING_LIMIT
+  if (list.length > RENDER_CAP) {
+    const sorted = [...list].sort(
+      (a, b) => (b.electricityKwhYear || 0) - (a.electricityKwhYear || 0))
+    ElMessage.warning(
+      `本园区共 ${list.length}${capped ? '+' : ''} 栋建筑，` +
+      `为保证 3D 流畅仅渲染年用电量最高的 ${RENDER_CAP} 栋`)
+    return sorted.slice(0, RENDER_CAP)
+  }
+  return list
+}
+
 async function rebuild() {
   if (!siteId.value) return
   // 截图模式：?mode=eui|anomaly 直接以该着色模式构建，便于回归对比
@@ -1111,20 +1162,8 @@ async function rebuild() {
   }
   loading.value = true
   try {
-    const list = await energyApi.buildings({ siteId: siteId.value, limit: 300 })
-    buildings.value = list
-    blobs.value = list
-
-    siteStat.electricity = list.reduce((s, b) => s + (b.electricityKwhYear || 0), 0)
-    siteStat.carbon = list.reduce(
-      (s, b) => s + (b.electricityKwhYear || 0) * 0.581, 0)
-    siteStat.anomalyCount = list.filter((b) => (b.anomalyRate ?? 0) > 0.05).length
-
-    const grades = list.map((b) => b.energyGrade).filter((g): g is string => !!g && g !== '未评级')
-    const order = ['A', 'B', 'C', 'D', 'E']
-    siteStat.avgGrade = grades.length
-      ? order[Math.round(grades.reduce((s, g) => s + order.indexOf(g), 0) / grades.length)] || '--'
-      : '--'
+    const list = await fetchBuildings()
+    applyBuildingList(list)
 
     await nextTick()
     buildBuildings()
@@ -1149,6 +1188,39 @@ async function rebuild() {
     loading.value = false
   }
 }
+
+/**
+ * 数据变更后的增量刷新。
+ *
+ * - 建筑集合未变（最常见：已有建筑导入了新能耗/新评级）
+ *   → 只更新评级颜色与统计，**复用现有 Three.js 模型**，不重建场景；
+ * - 集合变化（新增/删除建筑）
+ *   → 重建场景。clearScene 不触碰 camera/controls，相机角度与缩放自动保留；
+ *     选中项在 applyBuildingList 中按 buildingId 重新映射。
+ */
+async function refreshBuildings() {
+  if (!siteId.value || !scene) return
+  const list = await fetchBuildings()
+  const prevIds = new Set(modelMap.keys())
+  const nextIds = new Set(list.map((b) => b.buildingId))
+  const sameSet = prevIds.size === nextIds.size
+    && [...nextIds].every((id) => prevIds.has(id))
+
+  applyBuildingList(list)
+
+  // 高度按面积时，建筑集合不变 ⇒ 体量也不会变，只需换色
+  if (sameSet && heightBy.value === 'area') {
+    applyColors()
+    markDirty()
+    return
+  }
+
+  await nextTick()
+  buildBuildings()
+}
+
+// 导入新数据后（keep-alive 缓存场景）增量刷新建筑与评级
+useDataVersionRefresh(() => refreshBuildings())
 
 function gotoAnomaly() {
   router.push({ path: '/anomaly', query: { buildingId: selected.value?.buildingId } })

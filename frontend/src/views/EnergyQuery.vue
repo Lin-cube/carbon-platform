@@ -185,6 +185,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Search, Download } from '@element-plus/icons-vue'
 import EChart from '@/components/EChart.vue'
 import { energyApi } from '@/api'
+import { useDataVersionRefresh } from '@/composables/useDataVersionRefresh'
 import { useAppStore } from '@/stores/app'
 import { fmtNum, fmtInt, type EChartsOption } from '@/utils/echarts'
 import type {
@@ -493,6 +494,12 @@ async function loadAll() {
     loading.value = false
   }
 }
+
+// 导入新数据后重新查询（含建筑下拉，便于选到新建建筑）
+useDataVersionRefresh(async () => {
+  await loadBuildings()
+  await loadAll()
+})
 
 onMounted(async () => {
   try {

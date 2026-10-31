@@ -331,6 +331,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
 import { analyticsApi, energyApi } from '@/api'
 import AiInsight from '@/components/AiInsight.vue'
+import { useDataVersionRefresh } from '@/composables/useDataVersionRefresh'
 import { useAppStore } from '@/stores/app'
 import { fmtNum, fmtInt } from '@/utils/echarts'
 import type {
@@ -571,6 +572,13 @@ async function openSuggest(row: AnomalyEvent) {
 function onRowClick(row: AnomalyEvent) {
   openDiagnose(row)
 }
+
+// 导入新数据后重载建筑列表 / 事件 / 汇总
+useDataVersionRefresh(async () => {
+  await loadBuildings()
+  await loadEvents()
+  await loadSummary()
+})
 
 onMounted(async () => {
   try {
