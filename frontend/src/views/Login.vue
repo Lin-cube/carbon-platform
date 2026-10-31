@@ -1,95 +1,86 @@
 <template>
   <div class="login-page">
-    <!-- ══════════ 背景层（纯装饰，不拦截点击） ══════════ -->
-    <div class="bg-layer" aria-hidden="true">
-      <!-- 左上方一片宽阔柔和的清晨自然光 -->
-      <div class="bg-light"></div>
-      <!-- 左侧边缘的植物叶片投影（低饱和灰绿，虚化） -->
-      <div class="leaf-shadow leaf-shadow--a"></div>
-      <div class="leaf-shadow leaf-shadow--b"></div>
-      <div class="leaf-shadow leaf-shadow--c"></div>
-    </div>
+    <!-- 全屏 Ken Burns 动态背景（独立组件） -->
+    <KenBurnsBackground />
 
-    <div class="login-shell">
+    <main class="shell">
       <!-- ══════════ 左侧：品牌展示 ══════════ -->
-      <section class="brand">
-        <div class="brand-logo">
-          <svg class="logo-mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M12 1.8c5.9 6.3 5.9 14.1 0 20.4C6.1 15.9 6.1 8.1 12 1.8Z"
-                  fill="currentColor" opacity=".92"/>
-            <path d="M12 4.6v15.9" stroke="#ffffff" stroke-width="1.05"
-                  stroke-linecap="round" opacity=".62"/>
-            <path d="M12 9.4 8.6 7.2M12 13.6l-3.4-2.2M12 9.4l3.4-2.2M12 13.6l3.4-2.2"
-                  stroke="#ffffff" stroke-width=".85" stroke-linecap="round" opacity=".45"/>
+      <section class="intro">
+        <div class="brand">
+          <svg viewBox="0 0 32 32" aria-hidden="true">
+            <path d="M25 4C11 7 6 16 12 27c14-3 19-12 13-23Z" fill="#58a78b" />
+            <path
+              d="M13 27C16 18 20 13 25 7"
+              stroke="#e9fff2"
+              stroke-width="1.5"
+              fill="none"
+            />
           </svg>
-          <span class="brand-name">碳能智控</span>
+          碳能智控
         </div>
 
-        <h1 class="brand-title">
+        <div class="eyebrow">SMART ENERGY · GREEN FUTURE</div>
+
+        <h1 class="headline">
           让能源管理<br />
-          <span class="brand-title-accent">更轻松一点。</span>
+          <span>更轻松一点。</span>
         </h1>
-
-        <p class="brand-sub">看清每一份能耗，让绿色运维成为日常。</p>
-
-        <!-- 唯一视觉主体：磨砂玻璃叶片 -->
-        <div class="brand-decor" aria-hidden="true">
-          <div class="glass-leaf">
-            <span class="glass-leaf-vein"></span>
-          </div>
-          <div class="glass-leaf-glow"></div>
-        </div>
       </section>
 
       <!-- ══════════ 右侧：登录卡片 ══════════ -->
-      <section class="form-side">
-        <!-- 小屏时显示的精简品牌 -->
-        <div class="brand-mobile">
-          <svg class="logo-mark" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="M12 1.8c5.9 6.3 5.9 14.1 0 20.4C6.1 15.9 6.1 8.1 12 1.8Z"
-                  fill="currentColor" opacity=".92"/>
-            <path d="M12 4.6v15.9" stroke="#ffffff" stroke-width="1.05" stroke-linecap="round" opacity=".62"/>
-          </svg>
-          <span class="brand-name">碳能智控</span>
-        </div>
-
-        <div class="login-card">
+      <section class="aside">
+        <div class="card">
           <h2 class="card-title">欢迎回来</h2>
-          <p class="card-sub">登录碳能智控，开启高效运维</p>
+          <p class="caption">登录碳能智控，开启高效运维</p>
 
-          <el-form ref="formRef" :model="form" :rules="rules" label-position="top"
-                   class="login-form" @keyup.enter="onSubmit">
+          <el-form
+            ref="formRef"
+            :model="form"
+            :rules="rules"
+            label-position="top"
+            class="login-form"
+            @keyup.enter="onSubmit"
+          >
             <el-form-item label="用户名" prop="username">
-              <el-input v-model="form.username" size="large" placeholder="请输入用户名"
-                        :prefix-icon="User" autocomplete="username" />
+              <el-input
+                v-model="form.username"
+                :prefix-icon="User"
+                placeholder="请输入用户名"
+                autocomplete="username"
+              />
             </el-form-item>
 
             <el-form-item label="密码" prop="password">
-              <el-input v-model="form.password" size="large" type="password" show-password
-                        placeholder="请输入密码" :prefix-icon="Lock"
-                        autocomplete="current-password" />
+              <el-input
+                v-model="form.password"
+                type="password"
+                show-password
+                :prefix-icon="Lock"
+                placeholder="请输入密码"
+                autocomplete="current-password"
+              />
             </el-form-item>
 
-            <el-button class="login-btn" size="large" :loading="loading" @click="onSubmit">
+            <button type="button" class="sign-in" :disabled="loading" @click="onSubmit">
               {{ loading ? '登录中…' : '登 录' }}
-            </el-button>
+            </button>
           </el-form>
 
-          <div class="demo-block">
-            <span class="demo-label">演示账号（点击填充）</span>
-            <div class="demo-accounts">
-              <button v-for="a in demoAccounts" :key="a.username" type="button"
-                      class="demo-chip" @click="fill(a)">
-                <span class="demo-chip-role">{{ a.label }}</span>
-                <span class="demo-chip-cred">{{ a.username }} / {{ a.password }}</span>
-              </button>
-            </div>
-          </div>
+          <div class="divide"></div>
+          <div class="demo-title">演示账号（点击填充）</div>
+          <button
+            v-for="a in demoAccounts"
+            :key="a.username"
+            type="button"
+            class="demo"
+            @click="fill(a)"
+          >
+            <span>{{ a.label }}</span>
+            <small>{{ a.username }} / {{ a.password }}</small>
+          </button>
         </div>
-
-        <p class="page-foot">碳能智控运维平台 · Carbon Energy O&amp;M Platform</p>
       </section>
-    </div>
+    </main>
   </div>
 </template>
 
@@ -97,7 +88,7 @@
 /**
  * 登录页。
  *
- * <p>本次仅重做视觉层，以下逻辑保持不变：
+ * <p>本次为视觉改造：布局与配色按参考设计还原，业务逻辑一律保持不变：
  * <ul>
  *   <li>登录接口：{@code userStore.login(username, password)} → POST /api/auth/login</li>
  *   <li>表单校验：用户名、密码非空（Element Plus FormRules，失焦触发）</li>
@@ -108,14 +99,14 @@
  *
  * <p><b>关于验证码</b>：本项目当前没有验证码功能——
  * AuthController 只有 /login、/me、/logout，LoginRequest 也只有 username/password。
- * SecurityConfig 里虽然白名单了 /api/auth/captcha，但后端并未实现该接口。
- * 因此这里不放验证码输入框（不放无法使用的控件）。
+ * 因此这里不放验证码输入框。
  */
 import { reactive, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
+import KenBurnsBackground from '@/components/KenBurnsBackground.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -152,7 +143,7 @@ async function onSubmit() {
       const redirect = (route.query.redirect as string) || '/dashboard'
       router.push(redirect)
     } catch {
-      /* 错误提示已由拦截器统一处理 */
+      /* 错误提示已由 axios 拦截器统一处理 */
     } finally {
       loading.value = false
     }
@@ -163,319 +154,166 @@ async function onSubmit() {
 <style scoped>
 /* ════════════════════════════ 设计变量 ════════════════════════════ */
 .login-page {
-  --bg-warm: #f7f9f6;          /* 暖白主背景 */
-  --sage-50: #eef4ef;          /* 极淡鼠尾草 */
-  --sage-100: #e5eee7;         /* 鼠尾草绿 */
-  --sage-200: #d3e0d7;         /* 稍深，用于边框 */
-  --green: #35866b;            /* 主色：沉稳清新绿（用于图标、强调大字） */
-  --green-btn: #327f66;        /* 按钮底色：比主色深一档，白字对比度 4.81:1 达 AA */
-  --green-dark: #2c755c;       /* hover：5.52:1 */
-  --ink: #253d35;              /* 标题：深灰绿 */
-  --ink-soft: #46584f;         /* 正文 */
-  --muted: #5d6e66;            /* 辅助文字：对背景 5.10:1，达 AA */
-  --hairline: rgba(53, 134, 107, 0.13);
+  --ink: #243e36;
+  --green: #358b70;
+  --quiet: #6f817a;
+  --border: #d5e4d9;
 
   position: relative;
-  min-height: 100vh;
-  background: var(--bg-warm);
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* ════════════════════════════ 背景层 ════════════════════════════ */
-.bg-layer {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;   /* 装饰层绝不拦截点击 */
-  overflow: hidden;
-}
-
-/* 左上方宽阔柔和的清晨自然光 */
-.bg-light {
-  position: absolute;
-  top: -26%;
-  left: -14%;
-  width: 72vw;
-  height: 78vh;
-  background:
-    radial-gradient(46% 52% at 42% 40%, rgba(255, 250, 236, 0.95) 0%, rgba(255, 250, 236, 0) 72%),
-    radial-gradient(58% 58% at 60% 55%, rgba(229, 238, 231, 0.72) 0%, rgba(229, 238, 231, 0) 70%);
-  filter: blur(6px);
-  animation: light-breathe 26s ease-in-out infinite;
-}
-
-/* 植物叶片投影：用 border-radius 做出叶形，再虚化 */
-.leaf-shadow {
-  position: absolute;
-  background: rgba(122, 152, 133, 0.22);
-  filter: blur(26px);
-  will-change: transform;
-}
-
-.leaf-shadow--a {
-  left: -110px;
-  top: 16%;
-  width: 330px;
-  height: 210px;
-  border-radius: 0 76% 0 76%;
-  transform: rotate(-16deg);
-  animation: sway-a 11s ease-in-out infinite;
-}
-
-.leaf-shadow--b {
-  left: -140px;
-  top: 46%;
-  width: 420px;
-  height: 260px;
-  border-radius: 0 72% 0 72%;
-  background: rgba(122, 152, 133, 0.17);
-  transform: rotate(-8deg);
-  animation: sway-b 14s ease-in-out infinite;
-}
-
-.leaf-shadow--c {
-  left: -70px;
-  bottom: 4%;
-  width: 250px;
-  height: 170px;
-  border-radius: 0 78% 0 78%;
-  background: rgba(122, 152, 133, 0.13);
-  transform: rotate(-26deg);
-  animation: sway-a 17s ease-in-out infinite reverse;
+  min-height: 100svh;
+  overflow-x: hidden;          /* 防止横向滚动条；纵向可滚动 */
+  isolation: isolate;
+  background: #f7faf7;
+  color: var(--ink);
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Microsoft YaHei', sans-serif;
 }
 
 /* ════════════════════════════ 布局骨架 ════════════════════════════ */
-.login-shell {
+.shell {
   position: relative;
   z-index: 1;
-  width: 100%;
-  max-width: 1180px;
-  padding: 48px 56px;
+  min-height: 100svh;
+  width: min(1250px, 92%);
+  margin: 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(380px, 440px);
-  gap: 72px;
+  grid-template-columns: minmax(0, 1fr) 424px;
   align-items: center;
+  gap: clamp(44px, 7vw, 135px);
+  padding: 42px 0;
 }
 
 /* ════════════════════════════ 左侧品牌 ════════════════════════════ */
+.intro {
+  margin-top: 0;
+  padding-left: clamp(0px, 4vw, 65px);
+}
+
 .brand {
-  position: relative;
-  padding-bottom: 12px;
-  animation: fade-up 0.62s cubic-bezier(0.22, 0.61, 0.36, 1) both;
-}
-
-.brand-logo {
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 9px;
-  color: var(--green);
+  gap: 10px;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  font-size: 16px;
+  margin-bottom: 54px;
+  color: var(--ink);
 }
 
-.logo-mark {
+.brand svg {
   width: 25px;
   height: 25px;
-  transform: rotate(18deg);     /* 叶尖斜指，比正立的更自然 */
   flex-shrink: 0;
 }
 
-.brand-name {
-  font-size: 17px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  color: var(--ink);
+.eyebrow {
+  color: #328b6f;
+  letter-spacing: 2.2px;
+  font-weight: 700;
+  margin-bottom: 16px;
+  font-size: 11px;
 }
 
-.brand-title {
-  margin: 42px 0 0;
-  font-size: clamp(30px, 3.4vw, 44px);
-  line-height: 1.42;
-  font-weight: 500;          /* 不用过粗 */
-  letter-spacing: 0.02em;
-  color: var(--ink);
+.headline {
+  margin: 0;
+  font-size: clamp(42px, 4.2vw, 65px);
+  line-height: 1.31;
+  letter-spacing: -2.6px;
+  font-weight: 760;
+  text-shadow: 0 1px 16px rgba(255, 255, 255, 0.22);
 }
 
-.brand-title-accent {
-  color: var(--green);
+.headline span {
+  color: #2d9173;
 }
 
-.brand-sub {
-  margin: 22px 0 0;
-  max-width: 22em;
-  font-size: 15px;
-  line-height: 1.95;
-  color: var(--muted);
-}
-
-/* 唯一的视觉主体：磨砂玻璃叶片 */
-.brand-decor {
-  position: relative;
-  margin-top: 56px;
-  height: 168px;
-  width: 300px;
-  pointer-events: none;
-}
-
-.glass-leaf {
-  position: absolute;
-  left: 10px;
-  top: 10px;
-  width: 196px;
-  height: 130px;
-  /* 两个对角圆、两个对角尖 —— 得到自然的叶形 */
-  border-radius: 68% 6% 68% 6%;
-  transform: rotate(-26deg);
-  background:
-    linear-gradient(135deg,
-      rgba(255, 255, 255, 0.88) 0%,
-      rgba(226, 237, 229, 0.72) 46%,
-      rgba(196, 216, 203, 0.58) 100%);
-  border: 1px solid rgba(53, 134, 107, 0.2);
-  backdrop-filter: blur(16px) saturate(118%);
-  -webkit-backdrop-filter: blur(16px) saturate(118%);
-  box-shadow:
-    inset 0 1px 1px rgba(255, 255, 255, 0.95),
-    inset -10px -14px 30px rgba(53, 134, 107, 0.07),
-    0 20px 48px -20px rgba(37, 61, 53, 0.3);
-  animation: leaf-sway 13s ease-in-out infinite;
-}
-
-/* 主叶脉：贯穿叶片的一道细弧 */
-.glass-leaf-vein {
-  position: absolute;
-  left: 50%;
-  top: 8%;
-  width: 1px;
-  height: 84%;
-  background: linear-gradient(
-    180deg,
-    rgba(53, 134, 107, 0.05) 0%,
-    rgba(53, 134, 107, 0.3) 45%,
-    rgba(53, 134, 107, 0.05) 100%);
-  transform: rotate(-26deg);
-  transform-origin: top center;
-}
-
-/* 叶柄：从左下角伸出的短茎 */
-.glass-leaf::after {
-  content: '';
-  position: absolute;
-  left: -34px;
-  bottom: -8px;
-  width: 44px;
-  height: 2px;
-  border-radius: 2px;
-  background: linear-gradient(90deg,
-    rgba(53, 134, 107, 0) 0%, rgba(53, 134, 107, 0.34) 100%);
-  transform: rotate(-26deg);
-}
-
-.glass-leaf-glow {
-  position: absolute;
-  left: 118px;
-  top: 34px;
-  width: 190px;
-  height: 124px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(255, 249, 232, 0.9) 0%, rgba(255, 249, 232, 0) 70%);
-  filter: blur(14px);
-}
-
-/* ════════════════════════════ 右侧表单 ════════════════════════════ */
-.form-side {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  min-width: 0;           /* 允许在 grid 中收缩，否则长文本会把容器撑出屏幕 */
-  animation: fade-up 0.62s cubic-bezier(0.22, 0.61, 0.36, 1) 0.08s both;
-}
-
-.brand-mobile {
-  display: none;
-}
-
-.login-card {
-  width: 100%;
-  max-width: 440px;
+/* ════════════════════════════ 右侧卡片 ════════════════════════════ */
+.aside {
+  justify-self: stretch;
   min-width: 0;
-  padding: 40px 40px 32px;
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.76);
-  border: 1px solid var(--hairline);
-  backdrop-filter: blur(18px) saturate(118%);
-  -webkit-backdrop-filter: blur(18px) saturate(118%);
+}
+
+.card {
+  padding: 42px 39px 38px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.85);
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.9) inset,
-    0 26px 64px -28px rgba(37, 61, 53, 0.22),
-    0 4px 16px -8px rgba(37, 61, 53, 0.08);
+    0 23px 70px rgba(19, 67, 48, 0.19),
+    0 1px 5px rgba(44, 92, 74, 0.08);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
 }
 
 .card-title {
   margin: 0;
-  font-size: 25px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: 27px;
+  font-weight: 750;
+  letter-spacing: -0.6px;
   color: var(--ink);
 }
 
-.card-sub {
-  margin: 9px 0 30px;
-  font-size: 13.5px;
-  color: var(--muted);
+.caption {
+  margin: 9px 0 35px;
+  font-size: 13px;
+  color: #7a8a80;
 }
 
-/* ── 表单 ── */
+/* ── 表单（Element Plus 外观对齐参考设计） ── */
 .login-form :deep(.el-form-item) {
   margin-bottom: 20px;
 }
 
 .login-form :deep(.el-form-item.is-required .el-form-item__label::before) {
-  display: none;          /* 去掉红星，保持清爽；校验失败时仍会显示红色错误文案 */
+  display: none;               /* 去掉红星，保持清爽 */
 }
 
 .login-form :deep(.el-form-item__label) {
-  padding-bottom: 7px;
+  padding-bottom: 11px;
   font-size: 13px;
-  font-weight: 500;
-  color: var(--ink-soft);
-  line-height: 1.4;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--ink);
 }
 
 .login-form :deep(.el-input__wrapper) {
-  height: 48px;
-  padding: 0 14px;
-  border-radius: 12px;
-  background: var(--sage-50);
-  box-shadow: 0 0 0 1px var(--sage-200) inset;
-  transition: box-shadow 0.2s ease, background 0.2s ease;
+  height: 52px;
+  padding: 0 12px;
+  border-radius: 11px;
+  background: #f5f9f6;
+  box-shadow: 0 0 0 1px var(--border) inset;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
 
 .login-form :deep(.el-input__wrapper:hover) {
-  background: #eaf1ec;
+  background: #f0f6f2;
   box-shadow: 0 0 0 1px #c3d5c9 inset;
 }
 
-/* 聚焦：细绿边框 + 极淡外圈 */
+/* 聚焦：柔和的绿色边框 + 极淡外圈 */
 .login-form :deep(.el-input__wrapper.is-focus) {
   background: #ffffff;
   box-shadow:
-    0 0 0 1px var(--green) inset,
-    0 0 0 4px rgba(53, 134, 107, 0.1);
+    0 0 0 1px #4aaf8a inset,
+    0 0 0 3px #53b89524;
 }
 
 .login-form :deep(.el-input__inner) {
-  font-size: 14.5px;
+  font-size: 14px;
   color: var(--ink);
 }
 
 .login-form :deep(.el-input__inner::placeholder) {
-  color: #7b9084;   /* 对浅绿底 3.05:1，占位符可辨识 */
+  color: #7b9084;
 }
 
 .login-form :deep(.el-input__prefix) {
-  color: #6f8479;
+  color: #7d9a8b;
   font-size: 16px;
+}
+
+.login-form :deep(.el-input__suffix) {
+  color: #6c887b;
 }
 
 /* 校验错误：不挤乱布局 */
@@ -491,262 +329,137 @@ async function onSubmit() {
 }
 
 /* ── 登录按钮 ── */
-.login-btn {
+.sign-in {
+  height: 52px;
   width: 100%;
-  height: 48px;
   margin-top: 4px;
+  background: #34866b;
+  color: #ffffff;
   border: none;
-  border-radius: 12px;
-  background: var(--green-btn);
-  color: #ffffff;
-  font-size: 15px;
-  font-weight: 500;
-  letter-spacing: 0.14em;
-  transition: background 0.2s ease, transform 0.12s ease, box-shadow 0.2s ease;
-  box-shadow: 0 8px 20px -10px rgba(53, 134, 107, 0.6);
+  border-radius: 11px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  box-shadow: 0 5px 12px #246d5220;
+  transition: transform 0.2s ease, background 0.2s ease;
 }
 
-.login-btn:hover,
-.login-btn:focus {
-  background: var(--green-dark);
-  color: #ffffff;
+.sign-in:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: #3d9878;          /* 悬停轻微变亮 */
 }
 
-.login-btn:active {
-  transform: translateY(1px);
-  box-shadow: 0 4px 12px -8px rgba(53, 134, 107, 0.7);
+.sign-in:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.sign-in:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
 }
 
 /* ── 演示账号 ── */
-.demo-block {
-  margin-top: 26px;
-  padding-top: 20px;
-  border-top: 1px solid rgba(37, 61, 53, 0.08);
+.divide {
+  height: 1px;
+  background: #e9efeb;
+  margin: 30px 0 19px;
 }
 
-.demo-label {
-  display: block;
-  margin-bottom: 11px;
+.demo-title {
   font-size: 12px;
-  color: var(--muted);
-  letter-spacing: 0.04em;
+  color: #89978e;
+  margin: 0 0 11px;
 }
 
-.demo-accounts {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.demo-chip {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+.demo {
   width: 100%;
-  min-width: 0;
-  padding: 9px 13px;
-  border: 1px solid rgba(53, 134, 107, 0.14);
-  border-radius: 10px;
-  background: rgba(238, 244, 239, 0.7);
+  border: 1px solid #d8e5dc;
+  background: #f4f8f5;
+  color: #3d544b;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 9px;
+  margin-top: 8px;
+  font-size: 12px;
   cursor: pointer;
   font-family: inherit;
-  text-align: left;
-  transition: border-color 0.18s ease, background 0.18s ease;
+  transition: background 0.18s ease, border-color 0.18s ease;
 }
 
-.demo-chip:hover {
-  border-color: rgba(53, 134, 107, 0.42);
-  background: rgba(229, 238, 231, 0.95);
+.demo:hover {
+  background: #e9f4ec;
+  border-color: #c8dccf;
 }
 
-.demo-chip-role {
-  flex-shrink: 0;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--ink-soft);
-}
-
-.demo-chip-cred {
-  min-width: 0;
+.demo small {
+  font-size: 11px;
+  color: #7d8b83;
+  font-variant-numeric: tabular-nums;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 12px;
-  color: #5d6e66;
-  font-variant-numeric: tabular-nums;
-}
-
-.page-foot {
-  margin: 22px 0 0;
-  max-width: 100%;
-  font-size: 11.5px;
-  color: var(--muted);
-  letter-spacing: 0.03em;
-  text-align: center;
-  overflow-wrap: anywhere;
-}
-
-/* ════════════════════════════ 动效 ════════════════════════════ */
-@keyframes fade-up {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-/* 背景光照在长周期内轻微变化，整体亮度保持稳定 */
-@keyframes light-breathe {
-  0%, 100% { opacity: 0.9; transform: scale(1) translate3d(0, 0, 0); }
-  50%      { opacity: 1;   transform: scale(1.035) translate3d(6px, 4px, 0); }
-}
-
-/* 叶片投影被微风吹动，只有几像素位移 */
-@keyframes sway-a {
-  0%, 100% { transform: rotate(-16deg) translate3d(0, 0, 0); }
-  50%      { transform: rotate(-14.4deg) translate3d(4px, -3px, 0); }
-}
-
-@keyframes sway-b {
-  0%, 100% { transform: rotate(-8deg) translate3d(0, 0, 0); }
-  50%      { transform: rotate(-9.6deg) translate3d(-4px, 3px, 0); }
-}
-
-@keyframes leaf-sway {
-  0%, 100% { transform: rotate(-12deg) translate3d(0, 0, 0); }
-  50%      { transform: rotate(-11deg) translate3d(2px, -3px, 0); }
-}
-
-/* 尊重「减少动态效果」偏好 */
-@media (prefers-reduced-motion: reduce) {
-  .brand,
-  .form-side,
-  .bg-light,
-  .leaf-shadow,
-  .glass-leaf {
-    animation: none !important;
-  }
-  .login-btn,
-  .login-form :deep(.el-input__wrapper) {
-    transition: none !important;
-  }
 }
 
 /* ════════════════════════════ 响应式 ════════════════════════════ */
-/* 中等屏幕：左侧收窄，装饰缩小 */
 @media (max-width: 1080px) {
-  .login-shell {
-    gap: 48px;
-    padding: 40px;
-    grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
+  .shell {
+    gap: clamp(30px, 5vw, 72px);
+    grid-template-columns: minmax(0, 1fr) 400px;
   }
-  .brand-decor {
-    height: 128px;
-    width: 240px;
-    margin-top: 40px;
-  }
-  .glass-leaf {
-    width: 186px;
-    height: 122px;
-  }
-  .glass-leaf-glow {
-    left: 100px;
-    top: 38px;
-    width: 140px;
-    height: 92px;
+  .card {
+    padding: 36px 30px 32px;
   }
 }
 
-/* 手机 / 平板竖屏：隐藏大部分左侧装饰，保留品牌名与完整表单 */
-@media (max-width: 880px) {
-  /* 小屏改用最朴素的块级流式布局：
-     不依赖 flex 居中 / grid 列宽 / max-width，从根上避免横向溢出 */
-  .login-page {
-    display: block;
-    min-height: 100vh;
-    overflow-x: hidden;
-    overflow-y: auto;
+@media (max-width: 820px) {
+  .shell {
+    grid-template-columns: 1fr;
+    width: min(520px, 90%);
+    gap: 28px;
+    padding: 38px 0 58px;
   }
-  .login-shell {
-    display: block;
-    width: 100%;
-    max-width: none;
-    padding: 28px 16px 36px;
-    margin: 0;
+  .intro {
+    padding: 0;
   }
   .brand {
-    display: none;              /* 左侧品牌整体隐藏 */
-  }
-  .bg-light {
-    width: 130vw;
-    height: 56vh;
-    top: -18%;
-    left: -35%;
-  }
-  .leaf-shadow--a { left: -150px; top: 8%; opacity: 0.8; }
-  .leaf-shadow--b { display: none; }
-  .leaf-shadow--c { left: -130px; bottom: 0; opacity: 0.7; }
-
-  .brand-mobile {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
     margin-bottom: 26px;
-    color: var(--green);
-    animation: fade-up 0.5s ease both;
   }
-  .brand-mobile .logo-mark {
-    width: 22px;
-    height: 22px;
+  .headline {
+    font-size: clamp(36px, 9vw, 50px);
+    letter-spacing: -1.8px;
   }
-  .brand-mobile .brand-name {
-    font-size: 15.5px;
-  }
-
-  .form-side {
-    display: block;
-    width: 100%;
-    min-width: 0;
-  }
-  .login-card {
-    width: 100%;
-    max-width: none;
-    padding: 26px 18px 22px;
+  .card {
+    padding: 29px 24px;
     border-radius: 20px;
-    background: rgba(255, 255, 255, 0.9);
-  }
-  .card-title {
-    font-size: 22px;
-  }
-  .card-sub {
-    margin-bottom: 24px;
-  }
-  /* 小屏下键盘弹出时不挤压表单 */
-  .login-form :deep(.el-input__wrapper) {
-    height: 46px;
-  }
-  .login-btn {
-    height: 46px;
-  }
-  .page-foot {
-    margin-top: 18px;
-    text-align: center;
   }
 }
 
-/* 超小屏：进一步压缩留白 */
 @media (max-width: 380px) {
-  .login-shell {
-    padding: 22px 14px 28px;
+  .card {
+    padding: 26px 18px;
   }
-  .login-card {
-    padding: 24px 16px 20px;
+  .card-title {
+    font-size: 24px;
   }
-  .demo-chip {
+  .demo {
     flex-direction: column;
     align-items: flex-start;
     gap: 2px;
   }
-  .demo-chip-cred {
-    width: 100%;
+}
+
+/* 尊重「减少动态效果」偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .sign-in {
+    transition: none;
+  }
+  .login-form :deep(.el-input__wrapper) {
+    transition: none;
   }
 }
 </style>
