@@ -91,18 +91,31 @@
         SELECT
             COUNT(DISTINCT d.building_id)      AS buildingCount,
             COUNT(DISTINCT d.site_id)          AS siteCount,
-            COUNT(*) * 24                      AS totalHours,
+            COALESCE(MAX(ea.evaluated_hours), COUNT(*) * 24) AS totalHours,
             ROUND(SUM(d.electricity_kwh), 1)   AS electricityKwh,
             ROUND(SUM(d.hvac_kwh), 1)          AS hvacKwh,
             ROUND(SUM(d.water_m3), 1)          AS waterM3,
             ROUND(SUM(d.carbon_kg), 1)         AS carbonKg,
             ROUND(AVG(d.cop_avg), 3)           AS copAvg,
             SUM(d.anomaly_hours)               AS anomalyHours,
-            ROUND(SUM(d.anomaly_hours) / NULLIF(COUNT(*) * 24, 0), 4) AS anomalyRate,
+            ROUND(SUM(d.anomaly_hours)
+                  / NULLIF(COALESCE(MAX(ea.evaluated_hours), COUNT(*) * 24), 0), 4) AS anomalyRate,
             CONCAT(MIN(d.stat_date), ' ~ ', MAX(d.stat_date)) AS timeRange,
             COUNT(DISTINCT CASE WHEN d.hvac_kwh > 0 THEN d.building_id END)       AS hvacBuildingCount,
             COUNT(DISTINCT CASE WHEN d.cop_avg IS NOT NULL THEN d.building_id END) AS copBuildingCount
         FROM agg_building_daily d
+        <!-- 异常率分母统一为「可评估小时」(agg_anomaly_daily)，
+             与 /analytics/anomaly 及 AI 报表口径一致；
+             无异常汇总数据时回退到 建筑天x24。 -->
+        LEFT JOIN (
+            SELECT SUM(a.evaluated_hours) AS evaluated_hours
+            FROM agg_anomaly_daily a
+            WHERE 1 = 1
+            <if test="startDate != null">AND a.stat_date &gt;= #{startDate}</if>
+            <if test="endDate != null">AND a.stat_date &lt;= #{endDate}</if>
+            <if test="siteId != null and siteId != ''">AND a.site_id = #{siteId}</if>
+            <if test="buildingId != null and buildingId != ''">AND a.building_id = #{buildingId}</if>
+        ) ea ON 1 = 1
         <where>
             <if test="startDate != null">AND d.stat_date &gt;= #{startDate}</if>
             <if test="endDate != null">AND d.stat_date &lt;= #{endDate}</if>
