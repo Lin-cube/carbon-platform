@@ -51,7 +51,7 @@
 
             <div class="bubble" :class="[m.role, { failed: !!m.error }]">
               <!-- 用户 / 助手文本（纯文本，保留换行） -->
-              <div class="bubble-text">{{ m.text }}</div>
+              <div class="bubble-text" v-html="renderMarkdown(m.text)"></div>
 
               <!-- 助手结构化信息 -->
               <template v-if="m.res">
@@ -177,6 +177,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Delete, Promotion, DocumentCopy } from '@element-plus/icons-vue'
 import { aiApi, energyApi } from '@/api'
+import { renderMarkdown } from '@/utils/markdown'
 import { useAppStore } from '@/stores/app'
 import type { BuildingRow, ChatResponse } from '@/types/api'
 
@@ -478,6 +479,33 @@ onMounted(async () => {
   color: #2f5d4a;
 }
 .bubble.failed { border-color: #e7c4c0; background: #fbf0ee; }
+
+/* Markdown 渲染元素（由 utils/markdown.ts 生成） */
+.bubble-text .md-p { margin: 0 0 6px; }
+.bubble-text .md-p:last-child { margin-bottom: 0; }
+.bubble-text .md-h { font-weight: 600; margin: 8px 0 4px; font-size: 14px; }
+.bubble-text .md-ul { margin: 4px 0 6px; padding-left: 18px; }
+.bubble-text .md-ul li { margin: 2px 0; }
+.bubble-text .md-code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(53, 134, 107, 0.09);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+.bubble-text .md-table {
+  border-collapse: collapse;
+  margin: 6px 0;
+  font-size: 12.5px;
+  width: 100%;
+}
+.bubble-text .md-table th,
+.bubble-text .md-table td {
+  border: 1px solid #dfe9e3;
+  padding: 4px 8px;
+  text-align: left;
+}
+.bubble-text .md-table th { background: #f2f8f4; font-weight: 600; }
 
 .bubble-text { white-space: pre-wrap; word-break: break-word; }
 

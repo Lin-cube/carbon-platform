@@ -179,9 +179,14 @@
           </el-tag>
           <span class="ai-report-range">{{ aiReportRange }}</span>
         </div>
+        <el-alert v-if="aiReportMode !== 'llm'" type="warning" :closable="false" show-icon
+                  class="mb-12"
+                  title="大模型暂不可达，已回退为模板叙述"
+                  description="通常是网络波动导致调用超时；网络恢复后点「重新生成」即可获得 AI 版叙述。" />
         <p class="ai-report-text">{{ aiReportText || '暂无叙述' }}</p>
       </template>
       <template #footer>
+        <el-button :loading="aiReportLoading" @click="onAiReport">重新生成</el-button>
         <el-button @click="aiReportVisible = false">关闭</el-button>
       </template>
     </el-dialog>
