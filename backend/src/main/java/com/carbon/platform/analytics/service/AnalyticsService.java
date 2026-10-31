@@ -563,8 +563,7 @@ public class AnalyticsService {
         }
 
         out.put("suggestions", suggestions);
-        out.put("disclaimer", "以上建议由算法基于实测数据生成，实施前须经运维人员结合现场情况复核"
-                + "（申报表第 17 条：AI 输出不直接作为最终决策依据）。");
+        out.put("disclaimer", "以上建议由算法基于实测数据生成，实施前须经运维人员结合现场情况复核。");
         return out;
     }
 
