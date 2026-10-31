@@ -619,15 +619,11 @@ public class DataImportService {
                 // 回填本次导入覆盖的日期区间，前端据此把全局时间范围切到新数据
                 result.setStartDate(minDate.toString());
                 result.setEndDate(maxDate == null ? minDate.toString() : maxDate.toString());
-                java.util.Map<String, Object> aggReport =
-                        aggregateRefreshService.refresh(affectedBuildings, minDate, maxDate);
-                // 预聚合刷新后再重算评级（评级依赖 fact 表已落库 + area_m2 已回填）
-                java.util.Map<String, Object> gradeReport =
-                        aggregateRefreshService.regrade(affectedBuildings);
-                aggReport.put("regrade", gradeReport);
-                // 异常重算：原始算法只在离线 Python 管道里跑，
-                // 不在这里补算的话，导入后异常诊断页永远是空/旧数据。
-                // 失败不影响导入本身。
+                java.util.Map<String, Object> aggReport = new java.util.LinkedHashMap<>();
+                // ★ 顺序很重要：必须先重算异常（写回 fact 的 anomaly_flag），
+                //   再刷新预聚合表——否则 agg_building_daily.anomaly_hours
+                //   会基于旧的（未评估）标记算出 0，导致看板异常率显示 0。
+                //   失败不影响导入本身。
                 try {
                     java.util.Map<String, Object> anomalyReport =
                             anomalyDetectionService.recompute(affectedBuildings, minDate, maxDate);
@@ -636,6 +632,11 @@ public class DataImportService {
                     log.warn("导入后异常重算失败（不影响导入）: {}", e.getMessage());
                     aggReport.put("anomaly", java.util.Map.of("error", String.valueOf(e.getMessage())));
                 }
+                aggReport.putAll(aggregateRefreshService.refresh(affectedBuildings, minDate, maxDate));
+                // 预聚合刷新后再重算评级（评级依赖 fact 表已落库 + area_m2 已回填）
+                java.util.Map<String, Object> gradeReport =
+                        aggregateRefreshService.regrade(affectedBuildings);
+                aggReport.put("regrade", gradeReport);
                 result.setAggregateRefresh(aggReport);
             }
 
