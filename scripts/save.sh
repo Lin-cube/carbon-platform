@@ -157,7 +157,9 @@ fi
 echo
 bold "════════ 推送后安全验证 ════════"
 SCODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
-  "https://raw.githubusercontent.com/$REPO/$BRANCH/secrets/local.env" 2>/dev/null || echo "000")
+  "https://raw.githubusercontent.com/$REPO/$BRANCH/secrets/local.env" 2>/dev/null)
+# curl 失败时 -w 已输出 000；此处仅兜底空值，切勿再 || echo（会拼成 000000）
+SCODE=${SCODE:-000}
 if [ "$SCODE" = "404" ]; then
   green "  ✅ secrets/local.env 在远程返回 404（未泄露）"
 elif [ "$SCODE" = "000" ]; then
