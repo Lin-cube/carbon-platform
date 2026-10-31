@@ -340,6 +340,7 @@ async function send() {
   lastQuestion.value = q
   question.value = ''
   sending.value = true
+  let watchdog = 0
 
   // 先插入空的助手消息，流式往里追加；res 先给一个骨架，便于工具卡实时显示
   const item = reactive<ChatItem>({
@@ -362,8 +363,12 @@ async function send() {
 
   try {
     const token = getToken()
+    // 看门狗：后端长时间无响应时主动中断，避免按钮永久禁用
+    const controller = new AbortController()
+    watchdog = window.setTimeout(() => controller.abort(), 120_000)
     const resp = await fetch('/api/ai/chat/stream', {
       method: 'POST',
+      signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {})
@@ -383,7 +388,13 @@ async function send() {
     const reader = resp.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-    while (true) {
+    // ★ 不能只依赖流自然结束：Tomcat 的 SSE 在部分情况下不会发出干净的
+    //   chunked 结束符（curl 会报 transfer closed with outstanding read data），
+    //   浏览器端 reader.read() 就会一直挂起，导致 sending 永远为 true、
+    //   发送按钮一直禁用，用户无法继续提问。
+    //   因此以 done/error 事件作为「回答结束」的权威信号，收到后立即跳出循环。
+    let finished = false
+    while (!finished) {
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
@@ -402,13 +413,22 @@ async function send() {
             item.res = full
             if (!item.text) item.text = full.answer || ''
           }
+          finished = true
         } else if (evt.event === 'error') {
           item.text = String(evt.data?.message || '生成失败')
           item.error = 'failed'
+          finished = true
         }
         scrollToBottom()
       }
     }
+    // 主动断开，释放连接（服务端可能迟迟不结束响应）
+    try {
+      await reader.cancel()
+    } catch {
+      /* 已收到 done，忽略取消异常 */
+    }
+
     if (!item.text.trim()) {
       item.text = '（空回答）'
     }
@@ -416,6 +436,7 @@ async function send() {
     item.text = '请求失败：后端未能返回结果，请检查服务状态或稍后重试。'
     item.error = 'failed'
   } finally {
+    window.clearTimeout(watchdog)
     sending.value = false
     scrollToBottom()
   }
