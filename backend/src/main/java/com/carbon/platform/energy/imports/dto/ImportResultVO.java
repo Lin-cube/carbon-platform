@@ -28,6 +28,9 @@ public class ImportResultVO {
     private String endDate;
     private String status;
 
+    /** 派生数据（异常/聚合/评级）状态：OK / FAILED / PENDING */
+    private String derivedStatus;
+
     private List<RowError> errors;
     private Map<String, Integer> fieldStats;
     private Boolean dryRun;

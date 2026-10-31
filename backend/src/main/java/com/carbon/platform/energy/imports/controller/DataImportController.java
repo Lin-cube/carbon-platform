@@ -38,6 +38,7 @@ public class DataImportController {
     private final JdbcTemplate jdbcTemplate;
     /** 回滚批次后需要刷新预聚合表，否则看板仍显示已删除的数据 */
     private final com.carbon.platform.energy.imports.service.AggregateRefreshService aggregateRefreshService;
+    private final com.carbon.platform.energy.imports.service.AnomalyDetectionService anomalyDetectionService;
     private final com.carbon.platform.energy.imports.service.ImportAuditExportService auditExportService;
 
     @Operation(summary = "步骤① 上传数据源并识别列（返回自动字段映射建议）")
@@ -195,7 +196,13 @@ public class DataImportController {
             java.time.LocalDate min = toLocalDate(range.get("minDate"));
             java.time.LocalDate max = toLocalDate(range.get("maxDate"));
             if (min != null && max != null) {
-                aggReport = aggregateRefreshService.refresh(blds, min, max);
+                try {
+                    aggReport = aggregateRefreshService.refresh(blds, min, max);
+                } catch (Exception e) {
+                    // 回滚本身（删数据）已成功；聚合刷新失败不该让回滚报错，
+                    // 记录原因，由后续重算/查询兜底
+                    aggReport.put("error", String.valueOf(e.getMessage()));
+                }
             }
         }
 
@@ -243,6 +250,75 @@ public class DataImportController {
         out.put("affectedBuildings", blds.size());
         out.put("aggregateRefresh", aggReport);
         return R.ok(out);
+    }
+
+    /**
+     * 重算某批次的派生数据：异常 → 聚合 → 评级。
+     *
+     * <p>补偿机制：导入时事实数据已落库、但派生刷新失败（批次状态
+     * 「部分成功（派生数据待重算）」、derived_status=FAILED）时调用本接口，
+     * 不必重新上传文件，也不会重复写事实数据。
+     */
+    @Operation(summary = "重算批次派生数据（异常/聚合/评级）")
+    @PostMapping("/logs/{id}/recompute")
+    public R<Map<String, Object>> recompute(@PathVariable Long id) {
+        Map<String, Object> log = jdbcTemplate.queryForMap(
+                "SELECT batch_no AS batchNo, dry_run AS dryRun, status FROM data_import_log WHERE id = ?", id);
+        if (isTrue(log.get("dryRun"))) {
+            throw new BizException(ResultCode.BAD_REQUEST, "预览批次没有写入数据，无需重算");
+        }
+        String batchNo = String.valueOf(log.get("batchNo"));
+
+        java.util.List<String> buildings = jdbcTemplate.queryForList(
+                "SELECT DISTINCT building_id FROM fact_energy_hourly WHERE import_batch_no = ?",
+                String.class, batchNo);
+        if (buildings.isEmpty()) {
+            throw new BizException(ResultCode.BAD_REQUEST,
+                    "该批次在事实表中已无数据（可能已回滚），无法重算");
+        }
+        java.time.LocalDate min = null;
+        java.time.LocalDate max = null;
+        try {
+            Map<String, Object> range = jdbcTemplate.queryForMap(
+                    "SELECT MIN(stat_date) AS minDate, MAX(stat_date) AS maxDate "
+                            + "FROM fact_energy_hourly WHERE import_batch_no = ?", batchNo);
+            min = toLocalDate(range.get("minDate"));
+            max = toLocalDate(range.get("maxDate"));
+        } catch (Exception ignore) {
+            // 无数据
+        }
+        if (min == null || max == null) {
+            throw new BizException(ResultCode.BAD_REQUEST, "无法确定该批次的日期区间，无法重算");
+        }
+
+        java.util.Set<String> blds = new java.util.LinkedHashSet<>(buildings);
+        Map<String, Object> report = new LinkedHashMap<>();
+        boolean ok = true;
+        String err = null;
+        try {
+            report.put("anomaly", anomalyDetectionService.recompute(blds, min, max));
+            report.putAll(aggregateRefreshService.refresh(blds, min, max));
+            report.put("regrade", aggregateRefreshService.regrade(blds));
+        } catch (Exception e) {
+            ok = false;
+            err = String.valueOf(e.getMessage());
+            report.put("error", err);
+        }
+
+        // 成功则把状态里的「（派生数据待重算）」去掉，失败则保留并记录原因
+        jdbcTemplate.update("""
+                UPDATE data_import_log
+                   SET derived_status = ?,
+                       status = CASE WHEN ? = 1 THEN REPLACE(status, '（派生数据待重算）', '') ELSE status END,
+                       error_message = ?
+                 WHERE id = ?
+                """, ok ? "OK" : "FAILED", ok ? 1 : 0, ok ? null : err, id);
+        healthControllerInvalidate();
+
+        report.put("derivedStatus", ok ? "OK" : "FAILED");
+        report.put("buildings", blds.size());
+        report.put("dateRange", min + " ~ " + max);
+        return R.ok(report);
     }
 
     private String placeholders(int n) {

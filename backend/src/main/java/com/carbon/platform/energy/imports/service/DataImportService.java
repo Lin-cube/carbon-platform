@@ -53,6 +53,15 @@ public class DataImportService {
     private final AnomalyDetectionService anomalyDetectionService;
     /** 导入后需要清空看板 AI 解读缓存，否则解读仍基于旧数据 */
     private final com.carbon.platform.ai.service.DashboardInsightService dashboardInsightService;
+    /** 编程式事务：用于「按块提交」，不用 @Transactional 把整次导入包成长事务 */
+    private final org.springframework.transaction.support.TransactionTemplate transactionTemplate;
+
+    /** 同一文件的并发导入闸门（进程内）；DB 侧另有在途批次检查作为兜底 */
+    private static final java.util.Set<String> IMPORT_LOCKS =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 在途批次超过该时长视为僵尸批次（进程被杀等），允许重新导入 */
+    private static final int INFLIGHT_STALE_MINUTES = 30;
 
     @Value("${carbon.import.tmp-dir:.import-tmp}")
     private String tmpDir;
@@ -548,56 +557,58 @@ public class DataImportService {
         result.setSkippedRows(skipped);
         result.setFieldStats(fieldStats);
 
-        // 落库
-        if (!dryRun && !batch.isEmpty()) {
-            // ★ 覆盖语义：先删除库中已存在的 (building_id, ts) 组合，再插入。
-            //
-            // 【为什么必须做】事实表主键是自增 id，(building_id, ts) 上只有普通索引，
-            // 因此重复导入同一文件会【无脑追加】出重复行。
-            // 实测：同一文件导入 3 次后，T1 + 2016-03-01 00:00 这行在库里变成 3 条，
-            // SUM 统计直接翻 3 倍，异常检测与预聚合表全部失真。
-            //
-            // 【覆盖语义的边界】只删除本次导入涉及的 (building_id, ts) 组合，
-            // 其它时间、其它建筑的数据完全不受影响。即：
-            //   · 重复导入同一时间段 → 覆盖（幂等）
-            //   · 导入新时间段       → 追加
-            // 这是能源数据最符合直觉的语义。
-            int replaced = deleteExistingRows(batch);
-            if (replaced > 0) {
-                log.info("本次导入覆盖已存在的 {} 条历史记录（按 building_id + ts 匹配）", replaced);
-            }
-            result.setReplacedRows(replaced);
+        // ================================================================
+        // 落库（分批事务 + 批次状态机）
+        // ================================================================
+        //
+        // 事务设计（刻意不把整个文件包进一个超长事务）：
+        //   阶段 0  解析/清洗        —— 纯内存，零写入
+        //   阶段 1  事实表分块写入    —— 每 1000 行一个事务：DELETE 同主键 + INSERT 原子提交
+        //   阶段 2  维表登记          —— 独立事务（幂等 upsert）
+        //   阶段 3  派生数据          —— 异常/聚合/评级，失败不回滚事实数据，标记为待重算
+        //   阶段 4  收尾              —— 更新批次状态
+        // 任一块失败只回滚该块；阶段 1 整体失败时按 batch_no 清理已写入行，不留半成品。
+        if (dryRun || batch.isEmpty()) {
+            result.setStatus("预览通过");
+            writeAuditLog(result, req, rules, failed);
+            return result;
+        }
 
+        // 同一文件并发落库闸门（进程内锁 + DB 在途检查）
+        if (!IMPORT_LOCKS.add(req.getFileId())) {
+            throw new BizException(ResultCode.BAD_REQUEST, "该文件正在导入中，请等待本次导入完成后再试");
+        }
+        boolean jobCreated = false;
+        try {
+            assertNoInflightJob(req.getFileId());
+            createJob(result, req, rules);
+            jobCreated = true;
+
+            // ── 阶段 1：事实表分块写入（每块一个事务，删除与插入同生共死）──
             final int BATCH = 1000;
+            int replacedTotal = 0;
+            int written = 0;
             for (int i = 0; i < batch.size(); i += BATCH) {
-                List<Object[]> part = batch.subList(i, Math.min(i + BATCH, batch.size()));
-                jdbcTemplate.batchUpdate("""
-                        INSERT INTO fact_energy_hourly
-                          (building_id, site_id, ts, stat_date, stat_year, stat_month, stat_day,
-                           stat_hour, stat_weekday, is_weekend, season,
-                           electricity_kwh, water_m3, hvac_kwh, gas_kwh, carbon_kg,
-                           air_temperature_c, humidity_pct,
-                           chw_supply_temp_c, chw_return_temp_c, occupancy_density,
-                           equipment_status, anomaly_flag, anomaly_type, severity,
-                           data_quality_flag, data_quality_type, data_grade, import_batch_no)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                                '正常', -1, '未评估', '未评估', -1, '未评估', ?, ?)
-                        """, part);
+                final java.util.List<Object[]> part = batch.subList(i, Math.min(i + BATCH, batch.size()));
+                final int[] rep = {0};
+                transactionTemplate.executeWithoutResult(st -> {
+                    rep[0] = deleteExistingRows(part);
+                    insertFactRows(part);
+                });
+                replacedTotal += rep[0];
+                written += part.size();
+                updateJobProgress(result.getBatchNo(), written);
             }
+            result.setReplacedRows(replacedTotal);
             result.setStatus(failed > 0 ? "部分成功" : "成功");
-            // 注册新建建筑到维表。
-            // 【为什么必须做】事实表有数据但 dim_building 没有记录时，
-            // 建筑列表接口（读维表）查不到这些建筑，导致：
-            //   · 能耗查询的建筑下拉框里选不到
-            //   · 3D 园区模型里不显示
-            //   · 看板筛选与统计按建筑类型分组时丢失
-            // 即"数据进了库，但系统不认识这栋楼"。实测踩过这个坑。
-            registerNewBuildings(batch, bldType, bldArea);
+            if (replacedTotal > 0) {
+                log.info("本次导入覆盖已存在的 {} 条历史记录（按 building_id + ts 匹配）", replacedTotal);
+            }
 
-            // ★ 增量刷新预聚合表。
-            // 【为什么必须做】看板 KPI、趋势图、园区/类型分解、日/月粒度查询
-            // 全部读预聚合表；导入只写事实表，不刷新的话用户在"看板"这个最主要的
-            // 界面上看不到新导入的数据（实测确认：日粒度查询返回 0 个数据点）。
+            // ── 阶段 2：维表登记（独立事务，幂等）──
+            transactionTemplate.executeWithoutResult(st -> registerNewBuildings(batch, bldType, bldArea));
+
+            // ── 阶段 3：派生数据（失败不回滚事实数据，标记待重算）──
             java.util.Set<String> affectedBuildings = new java.util.LinkedHashSet<>();
             java.time.LocalDate minDate = null;
             java.time.LocalDate maxDate = null;
@@ -616,50 +627,196 @@ public class DataImportService {
                 }
             }
             if (minDate != null) {
-                // 回填本次导入覆盖的日期区间，前端据此把全局时间范围切到新数据
                 result.setStartDate(minDate.toString());
                 result.setEndDate(maxDate == null ? minDate.toString() : maxDate.toString());
                 java.util.Map<String, Object> aggReport = new java.util.LinkedHashMap<>();
-                // ★ 顺序很重要：必须先重算异常（写回 fact 的 anomaly_flag），
-                //   再刷新预聚合表——否则 agg_building_daily.anomaly_hours
-                //   会基于旧的（未评估）标记算出 0，导致看板异常率显示 0。
-                //   失败不影响导入本身。
+                boolean derivedOk = true;
+                String derivedErr = null;
                 try {
-                    java.util.Map<String, Object> anomalyReport =
-                            anomalyDetectionService.recompute(affectedBuildings, minDate, maxDate);
-                    aggReport.put("anomaly", anomalyReport);
+                    // 顺序：异常 → 聚合 → 评级。先重算异常，聚合才有正确的 anomaly_hours。
+                    aggReport.put("anomaly", anomalyDetectionService.recompute(affectedBuildings, minDate, maxDate));
+                    aggReport.putAll(aggregateRefreshService.refresh(affectedBuildings, minDate, maxDate));
+                    aggReport.put("regrade", aggregateRefreshService.regrade(affectedBuildings));
+                    // refresh() 内部吞异常并写入 error，需要显式判定
+                    if (aggReport.get("error") != null) {
+                        derivedOk = false;
+                        derivedErr = String.valueOf(aggReport.get("error"));
+                    }
                 } catch (Exception e) {
-                    log.warn("导入后异常重算失败（不影响导入）: {}", e.getMessage());
-                    aggReport.put("anomaly", java.util.Map.of("error", String.valueOf(e.getMessage())));
+                    derivedOk = false;
+                    derivedErr = String.valueOf(e.getMessage());
+                    aggReport.put("error", derivedErr);
+                    log.error("派生数据刷新失败（事实数据已落库，可重算）", e);
                 }
-                aggReport.putAll(aggregateRefreshService.refresh(affectedBuildings, minDate, maxDate));
-                // 预聚合刷新后再重算评级（评级依赖 fact 表已落库 + area_m2 已回填）
-                java.util.Map<String, Object> gradeReport =
-                        aggregateRefreshService.regrade(affectedBuildings);
-                aggReport.put("regrade", gradeReport);
                 result.setAggregateRefresh(aggReport);
+                result.setDerivedStatus(derivedOk ? "OK" : "FAILED");
+                if (!derivedOk) {
+                    // 保留基础状态（成功/部分成功）再追加后缀，
+                    // 否则重算后去掉后缀会退化成「部分成功」（实测踩过）
+                    result.setStatus(result.getStatus() + "（派生数据待重算）");
+                    log.warn("批次 {} 派生数据待重算：{}", result.getBatchNo(), derivedErr);
+                }
             }
 
-            // 数据变更后主动失效看板概览缓存，使导入结果立即反映到监控看板
+            // ── 阶段 4：缓存失效 + 收尾 ──
             try {
                 com.carbon.platform.common.controller.HealthController.invalidateOverviewCache();
-                // 看板 AI 解读也基于聚合指标，数据变了必须一并失效
                 dashboardInsightService.invalidate();
             } catch (Exception ignore) {
                 // 缓存失效失败不影响导入
             }
-        } else {
-            result.setStatus("预览通过");
+            finalizeJob(result, req, rules, failed);
+            return result;
+        } catch (Exception e) {
+            // 失败：按批次号清理已写入的事实行，避免半成品；再标记批次失败
+            if (jobCreated) {
+                try {
+                    int cleaned = jdbcTemplate.update(
+                            "DELETE FROM fact_energy_hourly WHERE import_batch_no = ?", result.getBatchNo());
+                    log.warn("导入失败，已清理本批次写入的 {} 条事实记录（batch={}）", cleaned, result.getBatchNo());
+                } catch (Exception ce) {
+                    log.error("清理失败批次数据时出错（请用回滚接口清理 batch={}）：{}", result.getBatchNo(), ce.getMessage());
+                }
+                failJob(result.getBatchNo(), e);
+            }
+            throw e;
+        } finally {
+            IMPORT_LOCKS.remove(req.getFileId());
         }
-
-        // 审计留痕（无论预览与否都记录，符合"审计留痕"要求）
-        writeAuditLog(result, req, rules, failed);
-        return result;
     }
 
     // ================================================================
     // 内部工具
     // ================================================================
+
+    // ================================================================
+    // 批次状态机（导入中 → 成功/部分成功/失败；派生数据 OK/FAILED）
+    // ================================================================
+
+    /** 事实表批量插入；必须在调用方事务内执行（与 deleteExistingRows 同生共死） */
+    private void insertFactRows(java.util.List<Object[]> part) {
+        jdbcTemplate.batchUpdate("""
+                INSERT INTO fact_energy_hourly
+                  (building_id, site_id, ts, stat_date, stat_year, stat_month, stat_day,
+                   stat_hour, stat_weekday, is_weekend, season,
+                   electricity_kwh, water_m3, hvac_kwh, gas_kwh, carbon_kg,
+                   air_temperature_c, humidity_pct,
+                   chw_supply_temp_c, chw_return_temp_c, occupancy_density,
+                   equipment_status, anomaly_flag, anomaly_type, severity,
+                   data_quality_flag, data_quality_type, data_grade, import_batch_no)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                        '正常', -1, '未评估', '未评估', -1, '未评估', ?, ?)
+                """, part);
+    }
+
+    /** 创建导入批次记录（status=导入中），使崩溃/失败可被发现，而不是查无此批次 */
+    private void createJob(ImportResultVO r, ImportRequest req, ImportRequest.CleanRules rules) {
+        jdbcTemplate.update("""
+                INSERT INTO data_import_log
+                  (batch_no, file_id, file_name, file_type, total_rows, success_rows, failed_rows,
+                   field_mapping, clean_rules, status, dry_run, derived_status, operator)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                r.getBatchNo(), req.getFileId(), r.getFileName(), fileType(r.getFileName()),
+                r.getTotalRows(), 0, 0,
+                mappingJson(req), rulesJson(rules), "导入中", 0, "PENDING",
+                com.carbon.platform.common.util.SecurityUtils.currentUsername());
+    }
+
+    /** 分块进度：让长时间导入在审计页面可见，而不是一直显示 0 行 */
+    private void updateJobProgress(String batchNo, int written) {
+        try {
+            jdbcTemplate.update(
+                    "UPDATE data_import_log SET success_rows = ? WHERE batch_no = ?", written, batchNo);
+        } catch (Exception ignore) {
+            // 进度更新失败不影响导入
+        }
+    }
+
+    /** 成功收尾：写入统计、日期区间、覆盖行数、派生状态 */
+    private void finalizeJob(ImportResultVO r, ImportRequest req,
+                             ImportRequest.CleanRules rules, int failed) {
+        jdbcTemplate.update("""
+                UPDATE data_import_log
+                   SET success_rows = ?, failed_rows = ?, status = ?,
+                       start_date = ?, end_date = ?, replaced_rows = ?,
+                       derived_status = ?, error_message = NULL
+                 WHERE batch_no = ?
+                """,
+                r.getSuccessRows(), r.getFailedRows(), r.getStatus(),
+                toDate(r.getStartDate()), toDate(r.getEndDate()),
+                r.getReplacedRows() == null ? 0 : r.getReplacedRows(),
+                r.getDerivedStatus() == null ? "PENDING" : r.getDerivedStatus(),
+                r.getBatchNo());
+    }
+
+    /** 失败收尾：标记失败原因，保留批次号便于人工回滚残余行 */
+    private void failJob(String batchNo, Exception e) {
+        try {
+            jdbcTemplate.update(
+                    "UPDATE data_import_log SET status = '失败', error_message = ? WHERE batch_no = ?",
+                    truncate(String.valueOf(e.getMessage()), 2000), batchNo);
+        } catch (Exception ignore) {
+            // 状态更新失败不应覆盖原始异常
+        }
+    }
+
+    /**
+     * 重复提交保护：同一 fileId 已有「导入中/聚合中」的批次时不重复执行。
+     * 超过 {@link #INFLIGHT_STALE_MINUTES} 未更新的批次视为僵尸（进程被杀），允许重来。
+     */
+    private void assertNoInflightJob(String fileId) {
+        if (fileId == null || fileId.isBlank()) {
+            return;
+        }
+        Integer n = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM data_import_log
+                 WHERE file_id = ? AND status IN ('导入中','聚合中')
+                   AND (updated_at IS NULL OR updated_at > DATE_SUB(NOW(), INTERVAL ? MINUTE))
+                """, Integer.class, fileId, INFLIGHT_STALE_MINUTES);
+        if (n != null && n > 0) {
+            throw new BizException(ResultCode.BAD_REQUEST,
+                    "该文件已有导入任务正在进行（进程内或其它实例），请等待完成后再试");
+        }
+    }
+
+    private String fileType(String fileName) {
+        return fileName != null && fileName.toLowerCase(Locale.ROOT).endsWith(".xlsx") ? "EXCEL" : "CSV";
+    }
+
+    private String mappingJson(ImportRequest req) {
+        if (req.getMappings() == null) {
+            return "{}";
+        }
+        StringBuilder sb = new StringBuilder("{");
+        for (ImportRequest.FieldMapping fm : req.getMappings()) {
+            if (sb.length() > 1) {
+                sb.append(",");
+            }
+            sb.append("\"").append(fm.getSourceColumn()).append("\":\"")
+                    .append(fm.getTargetField()).append("\"");
+        }
+        return sb.append("}").toString();
+    }
+
+    private String rulesJson(ImportRequest.CleanRules rules) {
+        return String.format(
+                "{\"trim\":%s,\"missing\":\"%s\",\"dropNegative\":%s,\"unit\":\"%s\",\"dedup\":\"%s\"}",
+                rules.getTrimString(), rules.getMissingStrategy(), rules.getDropNegative(),
+                rules.getElectricityUnit(), rules.getDedupStrategy());
+    }
+
+    private java.time.LocalDate toDate(String s) {
+        try {
+            return s == null || s.isBlank() ? null : java.time.LocalDate.parse(s);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String truncate(String s, int max) {
+        return s == null || s.length() <= max ? s : s.substring(0, max);
+    }
 
     private void writeAuditLog(ImportResultVO r, ImportRequest req,
                                ImportRequest.CleanRules rules, int failed) {
@@ -748,8 +905,10 @@ public class DataImportService {
                 total += jdbcTemplate.update(sql.toString(), params.toArray());
             }
         } catch (Exception e) {
-            // 删除失败不应阻断导入，但必须记录：这种情况下可能产生重复行
-            log.error("覆盖已有数据失败（本次导入可能产生重复行，请检查）", e);
+            // ★ 不再吞异常：删除与插入在同一事务内，删除失败必须让整块回滚，
+            //   否则会「只删不插」造成数据丢失。
+            throw new BizException(ResultCode.IMPORT_FAILED,
+                    "覆盖已有数据失败，本批次已回滚：" + e.getMessage());
         }
         return total;
     }
@@ -968,27 +1127,72 @@ public class DataImportService {
 
     /** 读取 CSV，自动处理 UTF-8 / UTF-8 BOM / GBK 编码 */
     private List<List<String>> readCsv(Path file, List<String> warnings) {
-        List<List<String>> out = new ArrayList<>();
         Charset cs = detectCharset(file, warnings);
-        try (BufferedReader reader = Files.newBufferedReader(file, cs)) {
-            String line;
-            boolean first = true;
-            while ((line = reader.readLine()) != null) {
-                if (out.size() > maxRows + 1) break;
-                if (first && line.startsWith("\uFEFF")) {
-                    line = line.substring(1);
-                }
-                first = false;
-                if (line.isEmpty()) continue;
-                out.add(parseCsvLine(line));
+        try {
+            return readCsvStrict(file, cs);
+        } catch (Exception first) {
+            // 编码探测可能误判（典型：8192 字节处截断了多字节汉字）。依次回退重试。
+            Charset fallback = StandardCharsets.UTF_8.equals(cs)
+                    ? Charset.forName("GBK") : StandardCharsets.UTF_8;
+            warnings.add("按 " + cs.name() + " 解析失败（" + first.getMessage()
+                    + "），已回退 " + fallback.name() + " 重试");
+            try {
+                return readCsvStrict(file, fallback);
+            } catch (Exception second) {
+                warnings.add("严格解码均失败，已启用有损解码（替换非法字节），个别字符可能显示为「?」");
+                return readCsvLenient(file);
             }
+        }
+    }
+
+    /** 严格解码读取：遇到非法字节直接抛错，由调用方决定回退策略 */
+    private List<List<String>> readCsvStrict(Path file, Charset cs) {
+        try (BufferedReader reader = Files.newBufferedReader(file, cs)) {
+            return readCsvLines(reader);
         } catch (IOException e) {
             throw new BizException(ResultCode.IMPORT_FAILED, "CSV 读取失败：" + e.getMessage());
+        }
+    }
+
+    /** 有损解码：非法字节替换为 U+FFFD，保证导入不因个别坏字节整体失败 */
+    private List<List<String>> readCsvLenient(Path file) {
+        java.nio.charset.CharsetDecoder dec = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPLACE)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPLACE);
+        try (BufferedReader reader = new BufferedReader(
+                new java.io.InputStreamReader(Files.newInputStream(file), dec))) {
+            return readCsvLines(reader);
+        } catch (IOException e) {
+            throw new BizException(ResultCode.IMPORT_FAILED, "CSV 读取失败：" + e.getMessage());
+        }
+    }
+
+    private List<List<String>> readCsvLines(BufferedReader reader) throws IOException {
+        List<List<String>> out = new ArrayList<>();
+        String line;
+        boolean first = true;
+        while ((line = reader.readLine()) != null) {
+            if (out.size() > maxRows + 1) break;
+            if (first && line.startsWith("\uFEFF")) {
+                line = line.substring(1);
+            }
+            first = false;
+            if (line.isEmpty()) continue;
+            out.add(parseCsvLine(line));
         }
         return out;
     }
 
-    /** 检测编码：优先 UTF-8，失败则回退 GBK（国内导出的 CSV 常见） */
+    /**
+     * 检测编码：优先 UTF-8，失败则回退 GBK（国内导出的 CSV 常见）。
+     *
+     * <p>【为什么不能直接 new String(bytes, UTF_8) 判断】采样窗口固定 8192 字节，
+     * 边界很可能正好切在一个 3 字节汉字的中间，解码后出现替换字符 U+FFFD，
+     * 于是**合法的 UTF-8 文件被误判成 GBK**，后续按 GBK 读会抛
+     * MalformedInputException（实测 5 万行文件必现，小文件因边界碰巧对齐而侥幸通过）。
+     *
+     * <p>改用严格解码器判定，并允许末尾最多 3 字节的不完整序列。
+     */
     private Charset detectCharset(Path file, List<String> warnings) {
         try {
             byte[] head = new byte[8192];
@@ -996,14 +1200,23 @@ public class DataImportService {
             try (InputStream in = Files.newInputStream(file)) {
                 n = in.read(head);
             }
-            if (n <= 0) return StandardCharsets.UTF_8;
-            String utf8 = new String(head, 0, n, StandardCharsets.UTF_8);
-            // UTF-8 解码出现替换字符 → 极可能不是 UTF-8
-            if (utf8.indexOf('\uFFFD') >= 0) {
-                warnings.add("文件非 UTF-8 编码，已按 GBK 解析（如出现乱码请另存为 UTF-8 后重试）");
-                return Charset.forName("GBK");
+            if (n <= 0) {
+                return StandardCharsets.UTF_8;
             }
-            return StandardCharsets.UTF_8;
+            java.nio.charset.CharsetDecoder dec = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT);
+            for (int cut = 0; cut <= 3 && cut < n; cut++) {
+                try {
+                    dec.reset();
+                    dec.decode(java.nio.ByteBuffer.wrap(head, 0, n - cut));
+                    return StandardCharsets.UTF_8;
+                } catch (java.nio.charset.CharacterCodingException ignore) {
+                    // 可能是末尾截断，继续尝试更短的窗口
+                }
+            }
+            warnings.add("文件非 UTF-8 编码，已按 GBK 解析（如出现乱码请另存为 UTF-8 后重试）");
+            return Charset.forName("GBK");
         } catch (IOException e) {
             return StandardCharsets.UTF_8;
         }

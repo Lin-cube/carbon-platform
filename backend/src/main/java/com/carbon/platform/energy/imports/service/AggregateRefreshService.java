@@ -65,6 +65,7 @@ public class AggregateRefreshService {
      * @param maxDate   涉及的最晚日期
      * @return 各表刷新行数的说明，用于审计日志与前端展示
      */
+    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
     public Map<String, Object> refresh(Set<String> buildings, LocalDate minDate, LocalDate maxDate) {
         Map<String, Object> report = new LinkedHashMap<>();
         if (buildings == null || buildings.isEmpty() || minDate == null || maxDate == null) {
@@ -91,9 +92,13 @@ public class AggregateRefreshService {
             log.info("预聚合表增量刷新完成：建筑 {} 栋，日期 {} ~ {}，耗时 {}ms",
                     buildings.size(), minDate, maxDate, System.currentTimeMillis() - t0);
         } catch (Exception e) {
-            // 刷新失败不应导致导入失败（事实数据已落库），但必须记录：看板会暂时看不到新数据
-            log.error("预聚合表刷新失败（事实数据已入库，看板暂不可见新数据）", e);
+            // 刷新失败：4 张聚合表必须整体回滚，避免「日表更新了、月表还是旧的」这种撕裂。
+            // 由调用方决定如何补偿（导入侧标记「派生数据待重算」，回滚侧忽略并继续）。
             report.put("error", e.getMessage());
+            log.error("预聚合表刷新失败，本次聚合变更已整体回滚：{}", e.getMessage());
+            throw new com.carbon.platform.common.exception.BizException(
+                    com.carbon.platform.common.result.ResultCode.IMPORT_FAILED,
+                    "预聚合刷新失败：" + e.getMessage());
         }
         return report;
     }
