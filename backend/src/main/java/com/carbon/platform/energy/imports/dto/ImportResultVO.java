@@ -23,6 +23,9 @@ public class ImportResultVO {
 
     /** 预聚合表刷新结果（导入后自动同步看板/统计用的聚合表） */
     private java.util.Map<String, Object> aggregateRefresh;
+    /** 本次导入数据覆盖的日期区间（前端据此自动切换查询范围） */
+    private String startDate;
+    private String endDate;
     private String status;
 
     private List<RowError> errors;

@@ -401,6 +401,8 @@ interface ImportResult {
   errors: { rowNum: number; field: string; message: string; value: string }[]
   fieldStats: Record<string, number>
   dryRun: boolean
+  startDate?: string
+  endDate?: string
 }
 interface ImportLog {
   id: number
@@ -595,7 +597,7 @@ async function doImport() {
     app.bumpDataVersion()
     step.value = 4
     await loadLogs()
-    await offerRangeSwitch(result.value?.batchNo)
+    await autoSwitchRange(result.value)
   } catch {
     /* 拦截器已提示 */
   } finally {
@@ -614,41 +616,40 @@ async function doImport() {
  *
  * <p>本函数从批次追溯接口取回该批次的真实起止日期，让用户一键跳转查看。
  */
-async function offerRangeSwitch(batchNo?: string) {
-  if (!batchNo) return
+/**
+ * 导入成功后自动把全局时间范围切到本批次数据的区间。
+ *
+ * 【为什么需要】全局范围默认写死 2016-01-01~2016-12-31，
+ * 导入 2017 数据后看板/能耗查询仍按 2016 过滤，用户会误以为没导入成功。
+ *
+ * 策略：当前范围与本批次不重叠时自动切换（无需用户手动改日期）；
+ * 重叠时保持用户当前选择不动，只提示可前往看板。
+ */
+async function autoSwitchRange(res?: ImportResult) {
+  const start = res?.startDate ? String(res.startDate).slice(0, 10) : ''
+  const end = res?.endDate ? String(res.endDate).slice(0, 10) : ''
+  if (!start || !end) return
+
+  // 日期区间是否重叠（字符串 YYYY-MM-DD 可直接比较）
+  const overlap = app.startDate <= end && start <= app.endDate
+  if (!overlap) {
+    app.setRange(start, end)
+    ElMessage.success(`已自动切换时间范围到 ${start} ~ ${end}`)
+  }
+
   try {
-    // 找到刚写入的批次 id
-    const logs = await request<Array<{ id: number; batchNo: string; dryRun?: number | boolean }>>({
-      url: '/import/logs',
-      method: 'get',
-      params: { limit: 10 }
-    })
-    const target = logs.find(l => l.batchNo === batchNo)
-    if (!target) return
-
-    const trace = await request<{ start?: string; end?: string; rowsInFact?: number }>({
-      url: `/import/logs/${target.id}/trace`,
-      method: 'get'
-    })
-    if (!trace?.start || !trace?.end) return
-
-    const start = String(trace.start).slice(0, 10)
-    const end = String(trace.end).slice(0, 10)
-    const rows = trace.rowsInFact ?? 0
-    if (rows <= 0) return
-
     await ElMessageBox.confirm(
-      `本批次数据的时间范围是 ${start} 至 ${end}（库中 ${rows} 行）。\n` +
-      `当前全局日期范围是 ${app.startDate} 至 ${app.endDate}，若与该范围不重叠，监控看板与能耗查询会显示为空。\n\n` +
-      `是否切换到本批次的时间范围并前往看板查看？`,
-      '导入成功 · 查看数据',
-      { type: 'success', confirmButtonText: '切换并查看看板', cancelButtonText: '留在本页' }
-    ).then(() => {
-      app.setRange(start, end)
-      router.push('/dashboard')
-    }).catch(() => { /* 用户选择留在本页 */ })
+      `本批次数据覆盖 ${start} 至 ${end}。` +
+      (overlap
+        ? `当前时间范围已包含该区间，未做改动。`
+        : `已自动把全局时间范围切换到该区间。`) +
+      `\n\n是否前往监控看板查看新数据？`,
+      '导入成功',
+      { type: 'success', confirmButtonText: '前往看板', cancelButtonText: '留在本页' }
+    )
+    router.push('/dashboard')
   } catch {
-    /* 追溯失败不影响导入结果 */
+    /* 留在本页 */
   }
 }
 
