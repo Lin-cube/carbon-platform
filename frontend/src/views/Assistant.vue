@@ -5,7 +5,6 @@
       <div class="filter-bar" style="margin-bottom: 0">
         <span v-if="healthMessage" class="text-dim" style="font-size: 12px">{{ healthMessage }}</span>
         <div class="head-actions">
-          <el-button size="small" :icon="HomeFilled" @click="goHome">返回首页</el-button>
           <el-button size="small" :icon="Delete" @click="clearChat">清空对话</el-button>
         </div>
       </div>
@@ -175,9 +174,8 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Delete, Promotion, DocumentCopy, HomeFilled } from '@element-plus/icons-vue'
+import { Delete, Promotion, DocumentCopy } from '@element-plus/icons-vue'
 import { aiApi, energyApi } from '@/api'
 import { useAppStore } from '@/stores/app'
 import type { BuildingRow, ChatResponse } from '@/types/api'
@@ -199,7 +197,6 @@ const buildings = ref<BuildingRow[]>([])
 /** 上一次提问（用于失败重试） */
 const lastQuestion = ref('')
 
-const router = useRouter()
 const aiMode = ref('')
 const healthMessage = ref('正在检测 AI 服务…')
 
@@ -273,11 +270,6 @@ function pickExample(q: string) {
 function askExample(q: string) {
   pickExample(q)
   send()
-}
-
-/** 返回首页（监控看板） */
-function goHome() {
-  router.push('/dashboard')
 }
 
 function clearChat() {
