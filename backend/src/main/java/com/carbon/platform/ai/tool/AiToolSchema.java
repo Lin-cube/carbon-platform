@@ -73,6 +73,22 @@ public class AiToolSchema {
                 List.of("buildingId", "startDate", "endDate")));
 
         tools.add(fn(
+                "diagnoseAnomaly", "对单栋建筑做异常归因诊断：对比「异常时段 vs 正常时段」的室外温度/湿度/人员在室率/单位小时能耗，给出有数据支撑的可能成因、置信度、证据与处置方向。用户问「为什么异常」「什么原因造成」「可能是哪些因素」时必须用本工具，不要用 webSearch。",
+                List.of(
+                        p("buildingId", "string", "建筑编号"),
+                        p("startDate", "string", "开始日期，YYYY-MM-DD"),
+                        p("endDate", "string", "结束日期，YYYY-MM-DD")),
+                List.of("buildingId", "startDate", "endDate")));
+
+        tools.add(fn(
+                "getOptimizationAdvice", "基于该建筑的真实能效画像与异常特征生成运维优化建议，每条包含依据(evidence)/措施(actions)/原理(basis)/优先级(priority)。用户问「有什么优化建议」「如何节能」「怎么改进」时必须用本工具；只有行业标准、法规与外部案例才用 webSearch。",
+                List.of(
+                        p("buildingId", "string", "建筑编号"),
+                        p("startDate", "string", "开始日期，YYYY-MM-DD"),
+                        p("endDate", "string", "结束日期，YYYY-MM-DD")),
+                List.of("buildingId", "startDate", "endDate")));
+
+        tools.add(fn(
                 "getCarbonEmissionSummary", "查询日期范围内的碳排放汇总（kg/吨），按电网平均排放因子 0.5810 kgCO₂/kWh 核算。",
                 List.of(
                         p("siteId", "string", "园区编号，可空表示全部园区"),

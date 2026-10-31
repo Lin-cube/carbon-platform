@@ -48,20 +48,53 @@ public class DeepSeekToolCallingService {
     private static final int MAX_TOOL_CALLS_PER_ROUND = 10;
     private static final int MAX_HISTORY_MESSAGES = 6;
     private static final String SYSTEM_PROMPT = """
-            你是「碳能智控运维平台」的 AI 助手小E。用中文简洁回答建筑能源问题。
-            当用户询问实际用电量、COP、碳排放、异常事件、排名或趋势时，必须调用工具查询真实数据库，不得凭空编造任何数值。
-            当用户询问运维建议、行业最佳实践、政策法规、标准规范、技术原理等通用知识时，必须调用 webSearch 联网搜索获取真实资料，
-            并在回答中给出可点击的来源链接，不要凭空作答。
-            只有问题缺少关键信息且无法合理推断时，才反问澄清；能合理推断的对象不要反复追问。
-            回答要包含园区/建筑名称、统计时间、单位和数据来源。工具无结果时明确说明「无数据」，不得编造。
-            禁止输出未经数据验证的节能百分比。回答控制在 300 字以内。""";
+            你是「碳能智控运维平台」的 AI 助手小E，服务对象是建筑能源运维人员。用中文简洁回答，控制在 300 字以内。
+
+            【工具路由——必须遵守】
+            1) 用电量 / 空调能耗 / 碳排 / COP / 异常事件 / 排名 / 趋势 → 调用对应数据工具查真实数据库，不得编造任何数值。
+            2) 问「为什么异常」「什么原因造成」「可能是哪些因素」→ 必须调用 diagnoseAnomaly（内部证据链），**不要用 webSearch**。
+            3) 问「有什么优化建议」「如何节能」「怎么改进」→ 必须调用 getOptimizationAdvice（基于该楼真实画像），**不要用 webSearch**。
+            4) 只有行业标准、法规、技术原理、外部案例才用 webSearch；一次提问最多搜索 1 次，结果不足再补 1 次，禁止同时发多个相似查询。
+            5) 多轮对话中，用户说「那栋楼 / 它 / 该建筑 / 这个园区」时，沿用上一轮已确定的对象，不要反问是哪一栋。
+            6) 一次回答尽量只调用必要的 1~2 个工具，不要把所有工具都调一遍。
+
+            【数据纪律】
+            - 回答必须包含园区/建筑名称、统计时间、单位与数据来源。
+            - 工具返回无数据或字段为 null 时，明确说明「无数据」，不得用行业均值顶替。
+            - 禁止输出未经数据验证的节能百分比或投资回报率。
+            - 归因结论需注明「需运维人员复核」。""";
 
     private final LlmClient llmClient;
     private final AiQueryToolService toolService;
     private final AiToolSchema toolSchema;
     private final AiToolUsageRecorder usageRecorder;
     private final YuanbaoSearchService yuanbaoSearch;
-    private final ObjectMapper mapper = new ObjectMapper();
+    /**
+     * 工具结果序列化用的 ObjectMapper。
+     *
+     * <p>必须注册 JavaTimeModule：诊断工具返回的异常时段里含 LocalDateTime，
+     * 默认 ObjectMapper 会抛 InvalidDefinitionException，导致工具被标记为失败
+     * （实测「这些异常可能由哪些因素造成」连续两次调用均失败）。
+     */
+    private final ObjectMapper mapper = new ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
+            .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+
+    /** 会话最近提到的建筑（sessionId → buildingId），用于多轮指代消解 */
+    private final Map<String, String> sessionBuilding = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 建筑编号特征：园区_类型_名称 */
+    private static final java.util.regex.Pattern BUILDING_ID_PATTERN =
+            java.util.regex.Pattern.compile("[A-Za-z]{2,}_[A-Za-z]{2,}_[A-Za-z]{2,}");
+
+    /** 指代词：出现即认为用户在追问上文对象 */
+    public static final java.util.regex.Pattern ANAPHOR = java.util.regex.Pattern.compile(
+            "那栋|那幢|那座|那家|它|这栋|这座|该楼|该建筑|该栋|这个建筑|上述建筑|同一栋|那个园区|该园区");
+
+    /** 会话最近提到的建筑编号（无则 null） */
+    public String lastBuildingId(String sessionId) {
+        return sessionId == null ? null : sessionBuilding.get(sessionId);
+    }
 
     /** 会话历史（sessionId → 最近消息），仅内存、按会话裁剪，不落库不增长无界 */
     private final Map<String, java.util.ArrayDeque<Map<String, String>>> sessionHistory =
@@ -145,6 +178,8 @@ public class DeepSeekToolCallingService {
         String finalAnswer = null;
 
         List<Map<String, Object>> tools = toolSchema.toolDefinitions();
+        // 本轮 webSearch 结果缓存（相同 query 不重复请求）
+        Map<String, String> webCache = new java.util.HashMap<>();
 
         try {
             for (int round = 0; round < MAX_ROUNDS; round++) {
@@ -180,14 +215,29 @@ public class DeepSeekToolCallingService {
                             call.setArgs(args);
                             Map<String, Object> out;
                             if ("webSearch".equals(tc.getName())) {
+                                // 同一轮内相同 query 只真正搜一次，避免重复请求
+                                String wq = String.valueOf(args.getOrDefault("query", ""));
+                                String cached = webCache.get(wq);
+                                if (cached != null) {
+                                    messages.add(msg("tool", cached, tc.getId(), null));
+                                    allCalls.add(call);
+                                    if (onTool != null) {
+                                        onTool.accept(call);
+                                    }
+                                    continue;
+                                }
                                 // 联网搜索：服务层独立，不经 AiQueryToolService（不碰数据库）
-                                out = yuanbaoSearch.search(String.valueOf(args.getOrDefault("query", "")),
-                                        intArg(args, "limit", 5));
+                                out = yuanbaoSearch.search(wq, intArg(args, "limit", 5));
                                 collectWebCitations(out, webCitations);
+                                try {
+                                    webCache.put(wq, toJson(out));
+                                } catch (Exception ignore) {
+                                    // 序列化失败不影响主流程
+                                }
                             } else {
                                 out = toolService.call(tc.getName(), args);
                             }
-                            result = mapper.writeValueAsString(out);
+                            result = toJson(out);
                             if (out != null && !out.isEmpty()) {
                                 evidence.put(tc.getName(), out);
                             }
@@ -236,10 +286,23 @@ public class DeepSeekToolCallingService {
         resp.setCompletionTokens(completionTokens);
         resp.setTotalTokens(totalTokens);
 
+        // 记录本轮涉及的建筑，供下一轮「那栋楼/它」指代消解
+        rememberBuilding(sessionId, buildingId, finalAnswer);
+
         // 记录本轮问答到会话历史（用于多轮上下文裁剪）
         appendHistory(sessionId, "user", question);
         appendHistory(sessionId, "assistant", finalAnswer);
         return resp;
+    }
+
+    /** 安全序列化：失败时降级为字符串，避免个别字段导致整条工具结果失败 */
+    private String toJson(Object value) {
+        try {
+            return mapper.writeValueAsString(value);
+        } catch (Exception e) {
+            log.warn("工具结果序列化失败，降级为字符串：{}", e.getMessage());
+            return "{\"note\":\"序列化失败，已降级为文本\"}";
+        }
     }
 
     /** 取会话历史（去旧保新，最多 6 条），并做会话数上限清理 */
@@ -262,6 +325,32 @@ public class DeepSeekToolCallingService {
         dq.addLast(Map.of("role", role, "content", content));
         while (dq.size() > MAX_HISTORY_MESSAGES) {
             dq.removeFirst();
+        }
+    }
+
+    /**
+     * 记录本轮涉及的建筑：
+     * 优先用请求上下文里的 buildingId，否则从回答文本中提取第一个建筑编号。
+     * 这样「那栋楼」在下一轮就能被解析成具体建筑，而不是反问用户。
+     */
+    private void rememberBuilding(String sessionId, String contextBuildingId, String answer) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        String bid = null;
+        if (StringUtils.hasText(contextBuildingId)) {
+            bid = contextBuildingId;
+        } else if (answer != null) {
+            var m = BUILDING_ID_PATTERN.matcher(answer);
+            if (m.find()) {
+                bid = m.group();
+            }
+        }
+        if (StringUtils.hasText(bid) && BUILDING_ID_PATTERN.matcher(bid).matches()) {
+            sessionBuilding.put(sessionId, bid);
+            if (sessionBuilding.size() > MAX_SESSIONS) {
+                sessionBuilding.clear();
+            }
         }
     }
 

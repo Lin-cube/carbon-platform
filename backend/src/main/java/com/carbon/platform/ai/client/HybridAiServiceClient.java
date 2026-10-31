@@ -132,6 +132,37 @@ public class HybridAiServiceClient implements AiServiceClient {
     private static final java.util.regex.Pattern BUILDING_ID =
             java.util.regex.Pattern.compile("[A-Za-z]{2,}_[A-Za-z]{2,}_[A-Za-z]{2,}");
 
+    /**
+     * 带会话上下文的知识类判断。
+     *
+     * <p>修复的坑：用户先问「Eagle 园区哪栋楼耗电最多」，再追问「那栋楼的 COP 怎么样」，
+     * 后一句含「怎样」会被 {@link #isKnowledge(String)} 判为知识类 → 路由到 RAG，
+     * 而 RAG 不知道「那栋楼」是谁，于是回答「未找到资料」。
+     * 只要出现指代词且会话里已有具体建筑，就必须走数据/诊断路径。
+     */
+    boolean isKnowledge(String question, String sessionId) {
+        if (question == null || question.isBlank()) {
+            return false;
+        }
+        if (DeepSeekToolCallingService.ANAPHOR.matcher(question).find()
+                && toolCalling.lastBuildingId(sessionId) != null) {
+            return false;
+        }
+        return isKnowledge(question);
+    }
+
+    /** 解析本轮应携带的建筑上下文：显式传入优先，否则用指代消解结果 */
+    private String resolveBuildingId(ChatRequest request) {
+        if (org.springframework.util.StringUtils.hasText(request.getBuildingId())) {
+            return request.getBuildingId();
+        }
+        String q = request.getQuestion();
+        if (q != null && DeepSeekToolCallingService.ANAPHOR.matcher(q).find()) {
+            return toolCalling.lastBuildingId(request.getSessionId());
+        }
+        return null;
+    }
+
     /** 判断是否知识类问题 */
     boolean isKnowledge(String question) {
         if (question == null || question.isBlank()) {
@@ -157,7 +188,7 @@ public class HybridAiServiceClient implements AiServiceClient {
 
     @Override
     public ChatResponse chat(ChatRequest request) {
-        boolean knowledge = isKnowledge(request.getQuestion());
+        boolean knowledge = isKnowledge(request.getQuestion(), request.getSessionId());
         if (knowledge) {
             ChatResponse r = ragEngine.chat(request);
             // RAG 不可用、检索为空，或明确拒答（「知识库中未找到」）时，回退联网搜索
@@ -180,7 +211,7 @@ public class HybridAiServiceClient implements AiServiceClient {
         log.debug("数据类问题，优先走 DeepSeek 工具调用：{}", request.getQuestion());
         ChatResponse tc = toolCalling.answer(
                 request.getSessionId(), request.getQuestion(),
-                siteId(request), request.getBuildingId(),
+                siteId(request), resolveBuildingId(request),
                 request.getStartDate(), request.getEndDate());
         if (tc != null && tc.getAnswer() != null && !tc.getAnswer().isBlank()) {
             return tc;
@@ -337,7 +368,7 @@ public class HybridAiServiceClient implements AiServiceClient {
                                    java.util.function.Consumer<String> onDelta,
                                    java.util.function.Consumer<ChatResponse.ToolCall> onTool) {
         // 知识类 / 兜底路径本身不是流式，走原逻辑后一次性回调
-        if (isKnowledge(request.getQuestion())) {
+        if (isKnowledge(request.getQuestion(), request.getSessionId())) {
             ChatResponse r = chat(request);
             if (r != null && r.getAnswer() != null && onDelta != null) {
                 onDelta.accept(r.getAnswer());
@@ -347,7 +378,7 @@ public class HybridAiServiceClient implements AiServiceClient {
         // 数据类问题：DeepSeek 工具调用 + 流式正文
         ChatResponse tc = toolCalling.answerStream(
                 request.getSessionId(), request.getQuestion(),
-                siteId(request), request.getBuildingId(),
+                siteId(request), resolveBuildingId(request),
                 request.getStartDate(), request.getEndDate(), onDelta, onTool);
         if (tc != null && tc.getAnswer() != null && !tc.getAnswer().isBlank()) {
             return tc;

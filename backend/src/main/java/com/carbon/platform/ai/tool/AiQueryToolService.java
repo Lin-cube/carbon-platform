@@ -92,6 +92,10 @@ public class AiQueryToolService {
                     buildingCop(str(a, "buildingId"), str(a, "startDate"), str(a, "endDate"));
             case "getBuildingAnomalies" ->
                     buildingAnomalies(str(a, "buildingId"), str(a, "startDate"), str(a, "endDate"), intArg(a, "limit", DEFAULT_LIMIT));
+            case "diagnoseAnomaly" ->
+                    diagnoseAnomaly(str(a, "buildingId"), str(a, "startDate"), str(a, "endDate"));
+            case "getOptimizationAdvice" ->
+                    optimizationAdvice(str(a, "buildingId"), str(a, "startDate"), str(a, "endDate"));
             case "getCarbonEmissionSummary" ->
                     carbonEmissionSummary(str(a, "siteId"), str(a, "startDate"), str(a, "endDate"));
             case "getTopAnomalyBuildings" ->
@@ -244,6 +248,28 @@ public class AiQueryToolService {
         out.put("maxDurationHours", an.getMaxDurationHours());
         out.put("events", scan.get("events"));
         return out;
+    }
+
+    /**
+     * ⑬ 异常归因诊断：异常时段 vs 正常时段的客观对比证据链。
+     *
+     * <p>与 /api/analytics/diagnose 同源，只输出有数据支撑的成因假设。
+     */
+    public Map<String, Object> diagnoseAnomaly(String buildingId, String startDate, String endDate) {
+        validateBuildingId(buildingId);
+        LocalDate[] r = parseRange(startDate, endDate);
+        return analyticsService.diagnose(r[0], r[1], List.of(buildingId));
+    }
+
+    /**
+     * ⑭ 优化建议：基于能效画像给出「依据 / 措施 / 原理」。
+     *
+     * <p>与 /api/analytics/suggest 同源，避免模型自行编造节能百分比。
+     */
+    public Map<String, Object> optimizationAdvice(String buildingId, String startDate, String endDate) {
+        validateBuildingId(buildingId);
+        LocalDate[] r = parseRange(startDate, endDate);
+        return analyticsService.suggestOptimization(r[0], r[1], buildingId);
     }
 
     /** ⑦ 碳排放汇总 */
