@@ -114,7 +114,14 @@
       <el-table :data="events" size="small" v-loading="loading" max-height="560"
                 highlight-current-row @row-click="onRowClick">
         <el-table-column type="index" label="#" width="50" />
-        <el-table-column prop="buildingId" label="建筑编号" min-width="190" show-overflow-tooltip />
+        <el-table-column prop="buildingId" label="建筑编号" min-width="190" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.handleStatus && row.handleStatus !== '未处理'"
+                  class="handle-dot" :class="'hs-' + statusKey(row.handleStatus)"
+                  :title="`处理状态：${row.handleStatus}${row.handleBy ? ' · ' + row.handleBy : ''}`"></span>
+            {{ row.buildingId }}
+          </template>
+        </el-table-column>
         <el-table-column prop="siteId" label="园区" width="100" />
         <el-table-column prop="buildingTypeCn" label="建筑类型" width="126" />
         <el-table-column prop="startTs" label="开始时间" width="150" sortable />
@@ -140,29 +147,12 @@
             </span>
           </template>
         </el-table-column>
-        <el-table-column prop="handleStatus" label="处理状态" width="112">
-          <template #default="{ row }">
-            <el-tag size="small" effect="plain" :type="statusTagType(row.handleStatus)">
-              {{ row.handleStatus || '未处理' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="处理信息" width="170" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span v-if="row.handleBy" class="text-dim" style="font-size: 12px">
-              {{ row.handleBy }} · {{ row.handleAt || '' }}
-            </span>
-            <span v-else class="text-dim" style="font-size: 12px">—</span>
-          </template>
-        </el-table-column>
         <el-table-column label="操作" width="152" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small"
                        @click.stop="openDiagnose(row)">诊断</el-button>
             <el-button link type="warning" size="small"
                        @click.stop="openSuggest(row)">优化建议</el-button>
-                       <el-button v-if="canHandle" link type="success" size="small"
-                                  @click.stop="openHandle(row)">处理异常</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -304,6 +294,56 @@
         </template>
         <el-empty v-else-if="!diagLoading" description="暂无诊断结果" />
       </div>
+
+          <!-- 处置闭环：低频操作收进诊断抽屉，不占列表列 -->
+          <div v-if="handleDetail" class="handle-section">
+            <div class="chart-title mt-12">
+              处置记录
+              <el-tag size="small" effect="plain" :type="statusTagType(handleDetail.handleStatus)">
+                {{ handleDetail.handleStatus || '未处理' }}
+              </el-tag>
+              <span v-if="handleDetail.handleBy" class="text-dim"
+                    style="font-size: 12px; font-weight: 400">
+                · {{ handleDetail.handleBy }} {{ handleDetail.handleAt || '' }}
+              </span>
+            </div>
+              <div class="chart-title">处理结论</div>
+              <el-form label-width="88px" class="mb-12">
+                <el-form-item label="处理状态">
+                  <el-select v-model="handleForm.status" style="width: 180px">
+                    <el-option v-for="st in HANDLE_STATUSES" :key="st" :label="st" :value="st" />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="处理备注">
+                  <el-input v-model="handleForm.note" type="textarea" :rows="4" maxlength="512"
+                            show-word-limit
+                            placeholder="例如：已核查为冷凝器结垢，安排 11 月清洗；清洗前临时降低负荷" />
+                </el-form-item>
+              </el-form>
+              <el-alert v-if="!canHandle" type="info" :closable="false" show-icon
+                        title="当前账号为只读权限，无法回写处理结论" />
+              <div v-else class="text-dim" style="font-size: 12px; margin-bottom: 12px">
+                提交后将以「{{ userStore.nickname || '当前用户' }}」的名义记录处理人与处理时间。
+                AI 建议仅供参考，处置结论由你确认。
+              </div>
+              <el-button v-if="canHandle" type="primary" :loading="handleSaving"
+                         style="width: 100%" @click="submitHandle">
+                提交处理结论
+              </el-button>
+
+              <div class="chart-title mt-12">处理历史</div>
+              <el-empty v-if="!handleDetail.history?.length" description="暂无处理记录" :image-size="60" />
+              <el-timeline v-else>
+                <el-timeline-item v-for="h in handleDetail.history" :key="h.id"
+                                 :timestamp="`${h.createdAt} · ${h.operator || '系统'}`"
+                                 placement="top">
+                  <div style="font-size: 13px">
+                    <b>{{ h.fromStatus || '—' }} → {{ h.toStatus }}</b>
+                  </div>
+                  <div v-if="h.note" class="text-dim" style="font-size: 12.5px">{{ h.note }}</div>
+                </el-timeline-item>
+              </el-timeline>
+          </div>
     </el-drawer>
 
     <!-- 优化建议抽屉（快捷入口，聚焦建议） -->
@@ -344,62 +384,6 @@
       </div>
     </el-drawer>
 
-      <!-- 处理异常抽屉：状态回写 + 备注 + 历史记录 -->
-      <el-drawer v-model="handleVisible" size="46%" title="处理异常">
-        <div v-loading="handleLoading">
-          <template v-if="handleDetail">
-            <el-descriptions :column="2" border size="small" class="mb-12">
-              <el-descriptions-item label="建筑编号">{{ handleDetail.buildingId }}</el-descriptions-item>
-              <el-descriptions-item label="园区">{{ handleDetail.siteId }}</el-descriptions-item>
-              <el-descriptions-item label="异常时间">{{ handleDetail.startTs }} ~ {{ handleDetail.endTs }}</el-descriptions-item>
-              <el-descriptions-item label="持续时长">{{ handleDetail.durationHours }} h</el-descriptions-item>
-              <el-descriptions-item label="异常类型">{{ handleDetail.anomalyType }}</el-descriptions-item>
-              <el-descriptions-item label="严重度">{{ handleDetail.severity || '未分级' }}</el-descriptions-item>
-              <el-descriptions-item label="峰值 / 基线">
-                {{ fmtNum(handleDetail.peakValue) }} / {{ fmtNum(handleDetail.baselineValue) }} kWh
-              </el-descriptions-item>
-              <el-descriptions-item label="偏离">{{ handleDetail.deviationPct ?? '--' }}%</el-descriptions-item>
-            </el-descriptions>
-
-            <div class="chart-title">处理结论</div>
-            <el-form label-width="88px" class="mb-12">
-              <el-form-item label="处理状态">
-                <el-select v-model="handleForm.status" style="width: 180px">
-                  <el-option v-for="st in HANDLE_STATUSES" :key="st" :label="st" :value="st" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="处理备注">
-                <el-input v-model="handleForm.note" type="textarea" :rows="4" maxlength="512"
-                          show-word-limit
-                          placeholder="例如：已核查为冷凝器结垢，安排 11 月清洗；清洗前临时降低负荷" />
-              </el-form-item>
-            </el-form>
-            <el-alert v-if="!canHandle" type="info" :closable="false" show-icon
-                      title="当前账号为只读权限，无法回写处理结论" />
-            <div v-else class="text-dim" style="font-size: 12px; margin-bottom: 12px">
-              提交后将以「{{ userStore.nickname || '当前用户' }}」的名义记录处理人与处理时间。
-              AI 建议仅供参考，处置结论由你确认。
-            </div>
-            <el-button v-if="canHandle" type="primary" :loading="handleSaving"
-                       style="width: 100%" @click="submitHandle">
-              提交处理结论
-            </el-button>
-
-            <div class="chart-title mt-12">处理历史</div>
-            <el-empty v-if="!handleDetail.history?.length" description="暂无处理记录" :image-size="60" />
-            <el-timeline v-else>
-              <el-timeline-item v-for="h in handleDetail.history" :key="h.id"
-                               :timestamp="`${h.createdAt} · ${h.operator || '系统'}`"
-                               placement="top">
-                <div style="font-size: 13px">
-                  <b>{{ h.fromStatus || '—' }} → {{ h.toStatus }}</b>
-                </div>
-                <div v-if="h.note" class="text-dim" style="font-size: 12.5px">{{ h.note }}</div>
-              </el-timeline-item>
-            </el-timeline>
-          </template>
-        </div>
-      </el-drawer>
   </div>
 </template>
 
@@ -446,7 +430,6 @@ const HANDLE_STATUSES = ['未处理', '处理中', '已处理', '已忽略', '�
 const userStore = useUserStore()
 /** 只有 admin / operator 能回写（后端 @PreAuthorize 兜底，前端只负责隐藏入口） */
 const canHandle = computed(() => userStore.hasRole('admin') || userStore.hasRole('operator'))
-const handleVisible = ref(false)
 const handleLoading = ref(false)
 const handleSaving = ref(false)
 const handleDetail = ref<AnomalyHandleDetail | null>(null)
@@ -618,6 +601,18 @@ async function loadBuildings() {
 
 // ---------------------------------------------------------------- 诊断 / 建议
 /** 处置状态 → el-tag 颜色 */
+/** 处置状态 → 小圆点类名后缀 */
+function statusKey(st?: string | null) {
+  switch (st) {
+    case '已处理': return 'done'
+    case '已忽略': return 'ignored'
+    case '处理中': return 'processing'
+    case '待复检': return 'verify'
+    default: return 'pending'
+  }
+}
+
+
 function statusTagType(st?: string | null) {
   switch (st) {
     case '已处理': return 'success'
@@ -630,7 +625,6 @@ function statusTagType(st?: string | null) {
 
 /** 打开处置抽屉：每次重新拉详情，拿到最新 handleVersion 用于乐观锁 */
 async function openHandle(row: AnomalyEvent) {
-  handleVisible.value = true
   handleLoading.value = true
   handleDetail.value = null
   try {
@@ -643,7 +637,6 @@ async function openHandle(row: AnomalyEvent) {
     }
   } catch (e: any) {
     ElMessage.error(e?.message || '加载异常详情失败')
-    handleVisible.value = false
   } finally {
     handleLoading.value = false
   }
@@ -671,6 +664,8 @@ async function submitHandle() {
 
 
 async function openDiagnose(row: AnomalyEvent) {
+  // 诊断抽屉同时承载处置入口：静默加载该异常的处置详情
+  void openHandle(row)
   current.value = row
   diagnose.value = null
   suggest.value = null
@@ -809,4 +804,19 @@ onMounted(async () => {
 
 :deep(.el-pagination) { justify-content: flex-end; }
 :deep(.el-table .cell) { font-variant-numeric: tabular-nums; }
+
+/* 处置状态小圆点：只在非「未处理」时出现，避免列表被状态列占满 */
+.handle-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: 1px;
+  background: #c9d3cd;
+}
+.handle-dot.hs-done { background: #35866B; }
+.handle-dot.hs-processing { background: #D18F5F; }
+.handle-dot.hs-ignored { background: #9aa8a0; }
+.handle-dot.hs-verify { background: #5B8FA8; }
 </style>
