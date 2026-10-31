@@ -4,7 +4,6 @@
     <div class="dash-head">
       <div class="dash-head-main">
         <span class="dash-head-title">能源全景监控</span>
-        <span class="dash-head-badge">历史数据</span>
       </div>
       <div class="dash-head-sub">
         当前园区 <b>{{ app.siteId || '全部园区' }}</b> · 数据区间
@@ -538,14 +537,6 @@ onMounted(async () => {
   font-weight: 600;
   color: var(--carbon-text, #253D35);
   letter-spacing: 0.01em;
-}
-.dash-head-badge {
-  padding: 1px 9px;
-  border-radius: 999px;
-  background: var(--carbon-primary-soft, #EBF3F0);
-  color: var(--carbon-primary, #35866B);
-  font-size: 11px;
-  font-weight: 500;
 }
 .dash-head-sub {
   margin-top: 5px;
