@@ -3,6 +3,7 @@ package com.carbon.platform.ai.client;
 import com.carbon.platform.ai.dto.ChatRequest;
 import com.carbon.platform.ai.service.DeepSeekToolCallingService;
 import com.carbon.platform.ai.search.YuanbaoSearchService;
+import com.carbon.platform.ai.service.DashboardInsightService;
 import com.carbon.platform.ai.dto.DiagnoseRequest;
 import com.carbon.platform.ai.dto.ReportRequest;
 import com.carbon.platform.ai.dto.ChatResponse;
@@ -55,6 +56,7 @@ public class HybridAiServiceClient implements AiServiceClient {
     private final HttpAiServiceClient ragEngine;
     private final DeepSeekToolCallingService toolCalling;
     private final YuanbaoSearchService yuanbaoSearch;
+    private final DashboardInsightService dashboardInsightService;
 
     /** 知识类问题的特征词。命中任一即判定为知识类，路由到 RAG。 */
     private static final List<String> KNOWLEDGE_MARKERS = List.of(
@@ -98,12 +100,14 @@ public class HybridAiServiceClient implements AiServiceClient {
             MockAiServiceClient localEngine,
             DeepSeekToolCallingService toolCalling,
             YuanbaoSearchService yuanbaoSearch,
+            DashboardInsightService dashboardInsightService,
             @Value("${carbon.ai.base-url:http://127.0.0.1:8000}") String baseUrl,
             @Value("${carbon.ai.connect-timeout-ms:3000}") int connectTimeout,
             @Value("${carbon.ai.read-timeout-ms:60000}") int readTimeout) {
         this.localEngine = localEngine;
         this.toolCalling = toolCalling;
         this.yuanbaoSearch = yuanbaoSearch;
+        this.dashboardInsightService = dashboardInsightService;
         // 手工构造而非注入：HttpAiServiceClient 带 @ConditionalOnProperty(mode=http)，
         // 在 hybrid 模式下不会被注册，但本类需要复用它。
         this.ragEngine = new HttpAiServiceClient(baseUrl, connectTimeout, readTimeout);
@@ -311,8 +315,17 @@ public class HybridAiServiceClient implements AiServiceClient {
 
     @Override
     public Map<String, Object> generateReport(ReportRequest request) {
-        // 报表是数据统计任务，本地引擎直接可算，无需知识库
-        return localEngine.generateReport(request);
+        // 结构化统计由本地引擎算（真实数据），叙述改由大模型生成
+        Map<String, Object> report = localEngine.generateReport(request);
+        if (Boolean.TRUE.equals(request.getWithNarrative())) {
+            Map<String, Object> llm = dashboardInsightService.reportNarrative(report);
+            if (llm != null && llm.get("narrative") != null) {
+                report.put("narrative", llm.get("narrative"));
+                report.put("mode", "llm");
+                report.put("narrativeAttempt", llm.get("attempt"));
+            }
+        }
+        return report;
     }
 
     @Override

@@ -1,6 +1,8 @@
 package com.carbon.platform.ai.service;
 
 import com.carbon.platform.ai.llm.LlmClient;
+import com.carbon.platform.analytics.dto.AnomalyAnalysisVO;
+import com.carbon.platform.analytics.dto.PeriodSummaryVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -618,6 +620,135 @@ public class DashboardInsightService {
      *
      * <p>判定很保守：正文里出现的每个 yyyy-MM-dd 必须在提示词原文里出现过。
      */
+    /**
+     * 用大模型生成报表的「数据叙述」（替代原来的固定模板）。
+     *
+     * <p>只使用报表里的真实统计数字，并复用 insight 的数字/日期校验：
+     * 模型若编造数字或日期，会带更严格的约束重试一次；仍不合规则返回 null，
+     * 由上层回退到模板叙述（保证接口永远可用）。
+     *
+     * @param report MockAiServiceClient 已算好的报表结构（overview + anomaly）
+     * @return {narrative, mode} ；不可用/校验失败返回 null
+     */
+    public Map<String, Object> reportNarrative(Map<String, Object> report) {
+        if (report == null || !llmClient.available()) {
+            return null;
+        }
+        Object ovObj = report.get("overview");
+        Object anObj = report.get("anomaly");
+        PeriodSummaryVO ov = ovObj instanceof PeriodSummaryVO p ? p : null;
+        AnomalyAnalysisVO an = anObj instanceof AnomalyAnalysisVO a ? a : null;
+        if (ov == null && an == null) {
+            return null;
+        }
+
+        String timeRange = String.valueOf(report.getOrDefault("timeRange", ""));
+        String reportType = String.valueOf(report.getOrDefault("reportType", "energy_summary"));
+        StringBuilder data = new StringBuilder();
+        data.append("报表类型：").append(reportType).append("\n");
+        data.append("统计区间：").append(timeRange).append("\n");
+
+        if (ov != null) {
+            data.append("\n核心数据：\n");
+            data.append("- 总用电量：").append(fmtBig(ov.getTotal(), "kWh")).append("\n");
+            if (ov.getPeak() != null) {
+                data.append("- 峰值：").append(fmtBig(ov.getPeak(), "kWh"))
+                        .append("（").append(nz(ov.getPeakLabel())).append("）\n");
+            }
+            if (ov.getValley() != null) {
+                data.append("- 谷值：").append(fmtBig(ov.getValley(), "kWh"))
+                        .append("（").append(nz(ov.getValleyLabel())).append("）\n");
+            }
+            if (ov.getPeakValleyRatio() != null) {
+                data.append("- 峰谷差率：").append(fmtPct(ov.getPeakValleyRatio())).append("\n");
+            }
+        }
+        if (an != null) {
+            data.append("- 异常率：").append(fmtPct(an.getAnomalyRate())).append("\n");
+            data.append("- 异常小时：").append(nz(an.getAnomalyHours())).append(" 小时\n");
+            data.append("- 异常事件：").append(nz(an.getEventCount())).append(" 起\n");
+            if (an.getByType() != null && !an.getByType().isEmpty()) {
+                data.append("- 异常类型：");
+                int n = 0;
+                for (AnomalyAnalysisVO.ByType t : an.getByType()) {
+                    if (n++ > 0) {
+                        data.append("、");
+                    }
+                    data.append(t.getType()).append(" ").append(fmtPct(t.getPercentage()));
+                    if (n >= 3) {
+                        break;
+                    }
+                }
+                data.append("\n");
+            }
+        }
+
+        String system = """
+                你是建筑能源运维分析师，为一份能耗统计报表写「数据叙述」。
+                要求：
+                1. 篇幅 180~260 字，2~3 个自然段，不要用 Markdown 标题或列表符号。
+                2. 第一段必须点明统计区间与范围，让读者一眼看出这份叙述覆盖什么。
+                3. 数字必须原样引用我给的写法（如 7233.61 万、4.57%），
+                   不要换算成精确值、不要补全位数、不要自己计算新的数字。
+                4. 只能使用我给的数据，不得编造任何数据或单位。
+                5. 某项指标为 0 或缺失时直接不提，不要解释缺失原因。
+                6. 语气客观，不要用「非常」「极大地」这类夸张词。
+                7. 最后一段给 1 条具体可执行的建议。
+                """;
+        String user = "请根据以下数据写报表叙述：\n\n" + data;
+
+        String[] startEnd = timeRange.split(" ~ ");
+        String startDate = startEnd.length > 0 ? startEnd[0].trim() : "";
+        String endDate = startEnd.length > 1 ? startEnd[1].trim() : "";
+
+        for (int attempt = 0; attempt < 2; attempt++) {
+            String extra = attempt == 0 ? ""
+                    : "\n\n【重要】上一次输出包含了数据中不存在的数字或日期。"
+                    + "本次只能原样引用上面列出的数字，日期只能用统计区间里的日期。";
+            String raw;
+            try {
+                raw = llmClient.chat(system + extra, user, 0.3, 600);
+            } catch (Exception e) {
+                log.warn("报表叙述生成失败：{}", e.getMessage());
+                return null;
+            }
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+            raw = raw.trim();
+            List<String> badDates = findUnknownDates(raw, user, startDate, endDate);
+            List<String> unknown = findUnknownNumbers(raw, user);
+            if (badDates.isEmpty() && unknown.isEmpty()) {
+                Map<String, Object> out = new LinkedHashMap<>();
+                out.put("narrative", raw);
+                out.put("mode", "llm");
+                out.put("attempt", attempt + 1);
+                return out;
+            }
+            log.warn("报表叙述校验未通过（第 {} 次）：未知数字={} 未知日期={}", attempt + 1, unknown, badDates);
+        }
+        return null;
+    }
+
+    // ── 报表叙述的数字格式化（给模型「原样引用」的写法）──
+    private String fmtBig(java.math.BigDecimal v, String unit) {
+        if (v == null) {
+            return "-";
+        }
+        double d = v.doubleValue();
+        if (Math.abs(d) >= 100_000_000) {
+            return String.format("%.2f 亿 %s", d / 100_000_000, unit);
+        }
+        if (Math.abs(d) >= 10_000) {
+            return String.format("%.2f 万 %s", d / 10_000, unit);
+        }
+        return String.format("%.0f %s", d, unit);
+    }
+
+    private String fmtPct(java.math.BigDecimal v) {
+        return v == null ? "-" : String.format("%.2f%%", v.doubleValue());
+    }
+
     private List<String> findUnknownDates(String text, String prompt, String... allowed) {
         List<String> bad = new ArrayList<>();
         if (text == null) return bad;
