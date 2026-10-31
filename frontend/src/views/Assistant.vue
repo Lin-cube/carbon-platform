@@ -3,15 +3,11 @@
     <!-- AI 服务状态条 -->
     <div class="page-card mb-12">
       <div class="filter-bar" style="margin-bottom: 0">
-        <span class="status-pill" :class="aiStatus">
-          <span class="dot"></span>
-          {{ statusText }}
-        </span>
-        <el-tag v-if="aiMode" size="small" effect="plain" :type="aiMode === 'mock' ? 'warning' : 'success'">
-          模式 {{ aiMode }}
-        </el-tag>
-        <span class="text-dim" style="font-size: 12px">{{ healthMessage }}</span>
-        <el-button class="ml-auto" size="small" :icon="Delete" @click="clearChat">清空对话</el-button>
+        <span v-if="healthMessage" class="text-dim" style="font-size: 12px">{{ healthMessage }}</span>
+        <div class="head-actions">
+          <el-button size="small" :icon="HomeFilled" @click="goHome">返回首页</el-button>
+          <el-button size="small" :icon="Delete" @click="clearChat">清空对话</el-button>
+        </div>
       </div>
 
       <el-alert v-if="aiMode === 'mock'" type="info" closable show-icon class="mt-12"
@@ -179,8 +175,9 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Delete, Promotion, DocumentCopy } from '@element-plus/icons-vue'
+import { Delete, Promotion, DocumentCopy, HomeFilled } from '@element-plus/icons-vue'
 import { aiApi, energyApi } from '@/api'
 import { useAppStore } from '@/stores/app'
 import type { BuildingRow, ChatResponse } from '@/types/api'
@@ -202,7 +199,7 @@ const buildings = ref<BuildingRow[]>([])
 /** 上一次提问（用于失败重试） */
 const lastQuestion = ref('')
 
-const aiStatus = ref<'loading' | 'up' | 'down'>('loading')
+const router = useRouter()
 const aiMode = ref('')
 const healthMessage = ref('正在检测 AI 服务…')
 
@@ -233,12 +230,6 @@ const capabilities = [
   { label: '异常诊断', icon: 'Warning', desc: '扫描异常事件与证据链', q: '2016年有哪些能耗异常？' },
   { label: '节能建议', icon: 'TrendCharts', desc: '数据驱动的优化措施', q: 'Hog_office_Sydney 有哪些可落地的优化建议？' }
 ]
-
-const statusText = computed(() => ({
-  loading: 'AI 服务检测中…',
-  up: 'AI 服务可用',
-  down: 'AI 服务不可用'
-})[aiStatus.value])
 
 const canSend = computed(() => !!question.value.trim() && !sending.value)
 
@@ -284,6 +275,11 @@ function askExample(q: string) {
   send()
 }
 
+/** 返回首页（监控看板） */
+function goHome() {
+  router.push('/dashboard')
+}
+
 function clearChat() {
   messages.value = []
   sessionId.value = uuid()
@@ -311,11 +307,9 @@ async function copyText(text: string) {
 async function loadStatus() {
   try {
     const [health, mode] = await Promise.all([aiApi.health(), aiApi.mode()])
-    aiStatus.value = String(health?.status) === 'UP' ? 'up' : 'down'
     aiMode.value = (mode as string) || String(health?.mode || '')
     healthMessage.value = String(health?.message || '')
   } catch {
-    aiStatus.value = 'down'
     aiMode.value = ''
     healthMessage.value = '无法连接后端 AI 接口，请确认服务已启动（/api/ai/health）'
   }
@@ -367,22 +361,7 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 3px 10px;
-  border-radius: 12px;
-  background: #f3f4f6;
-  color: #6b7280;
-}
-.status-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; }
-.status-pill.up { background: #e4f2ea; color: #2f7a61; }
-.status-pill.up .dot { background: #4f9d77; }
-.status-pill.down { background: #f9ece9; color: #9b564e; }
-.status-pill.down .dot { background: #c26b62; }
+.head-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
 .ml-auto { margin-left: auto; }
 
 /* ══════════ 欢迎页 ══════════ */
