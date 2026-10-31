@@ -164,7 +164,7 @@ elif [ "$SCODE" = "000" ]; then
   yellow "  ⚠️ 无法访问 GitHub（网络问题），请手动验证："
   yellow "     https://github.com/$REPO/blob/$BRANCH/secrets/local.env"
 else
-  red "  🚨 严重：secrets/local.env 在远程可访问（http=$SCODE）！"
+  red "  🚨 严重：secrets/local.env 在远程可访问（http=${SCODE}）！"
   red "     立即到 DeepSeek 控制台作废该 Key 并重新生成"
   exit 2
 fi
