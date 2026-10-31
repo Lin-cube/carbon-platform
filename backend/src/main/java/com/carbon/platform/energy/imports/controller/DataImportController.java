@@ -199,6 +199,39 @@ public class DataImportController {
             }
         }
 
+        // 清理本批次引入的异常聚合与事件（P0 重算新增的表，否则回滚后仍留全 0 行）
+        if (range != null && range.get("minDate") != null && !blds.isEmpty()) {
+            java.time.LocalDate min = toLocalDate(range.get("minDate"));
+            java.time.LocalDate max = toLocalDate(range.get("maxDate"));
+            if (min != null && max != null) {
+                String in = placeholders(blds.size());
+                Object[] base = blds.toArray();
+                jdbcTemplate.update(
+                        "DELETE FROM agg_anomaly_daily WHERE stat_date BETWEEN ? AND ? "
+                                + "AND building_id IN (" + in + ")",
+                        concat(new Object[]{java.sql.Date.valueOf(min), java.sql.Date.valueOf(max)}, base));
+                jdbcTemplate.update(
+                        "DELETE FROM fact_anomaly_event WHERE start_ts >= ? AND start_ts < ? "
+                                + "AND building_id IN (" + in + ")",
+                        concat(new Object[]{java.sql.Timestamp.valueOf(min.atStartOfDay()),
+                                java.sql.Timestamp.valueOf(max.plusDays(1).atStartOfDay())}, base));
+            }
+        }
+
+        // ★ 清理幽灵维表记录：本批次登记、且已无任何事实数据的建筑/园区。
+        //   不清理的话，3D 园区与筛选下拉会残留一个没有数据的空建筑/空园区。
+        if (!blds.isEmpty()) {
+            String in = placeholders(blds.size());
+            jdbcTemplate.update(
+                    "DELETE FROM dim_building WHERE building_id IN (" + in + ") "
+                            + "AND NOT EXISTS (SELECT 1 FROM fact_energy_hourly f "
+                            + "WHERE f.building_id = dim_building.building_id)",
+                    blds.toArray());
+        }
+        jdbcTemplate.update(
+                "DELETE FROM dim_site WHERE NOT EXISTS "
+                        + "(SELECT 1 FROM dim_building b WHERE b.site_id = dim_site.site_id)");
+
         // 审计：把该批次标记为已回滚（保留记录，不删除，符合审计要求）
         jdbcTemplate.update(
                 "UPDATE data_import_log SET status = '已回滚' WHERE id = ?", id);
@@ -210,6 +243,24 @@ public class DataImportController {
         out.put("affectedBuildings", blds.size());
         out.put("aggregateRefresh", aggReport);
         return R.ok(out);
+    }
+
+    private String placeholders(int n) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            if (i > 0) {
+                sb.append(",");
+            }
+            sb.append("?");
+        }
+        return sb.toString();
+    }
+
+    private Object[] concat(Object[] a, Object[] b) {
+        Object[] out = new Object[a.length + b.length];
+        System.arraycopy(a, 0, out, 0, a.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
     }
 
     /** 兼容 Boolean 与 Number 两种类型（TINYINT(1) 的驱动映射差异） */
