@@ -193,6 +193,16 @@ export interface SuggestResult {
   disclaimer?: string
 }
 
+export interface AiReport {
+  reportType: string
+  timeRange: string
+  overview: PeriodSummaryVO
+  anomaly: AnomalyAnalysisVO
+  narrative?: string
+  mode: string
+  narrativeAttempt?: number
+}
+
 export interface ChatResponse {
   ok: boolean
   answer: string

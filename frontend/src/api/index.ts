@@ -3,7 +3,7 @@ import type {
   LoginRequest, LoginResponse, UserInfo, SystemOverview,
   DimensionVO, OverviewVO, BreakdownVO, EnergyQueryRequest, TimeSeriesVO,
   PeriodSummaryVO, CopAnalysisVO, AnomalyAnalysisVO, DiagnoseResult,
-  SuggestResult, ChatResponse, BuildingRow, SiteRow
+  SuggestResult, ChatResponse, BuildingRow, SiteRow, AiReport
 } from '@/types/api'
 
 // ---------------------------------------------------------------- 认证
@@ -75,6 +75,11 @@ export const aiApi = {
     buildingId?: string; startDate?: string; endDate?: string
     context?: Record<string, unknown>
   }) => request<ChatResponse>({ url: '/ai/chat', method: 'post', data }),
+
+  report: (data: {
+    reportType?: string; startDate?: string; endDate?: string
+    siteId?: string; buildingIds?: string[]; withNarrative?: boolean
+  }) => request<AiReport>({ url: '/ai/report', method: 'post', data }),
 
   tools: () => request<{ mode: string; count: number; tools: unknown[] }>(
     { url: '/ai/tools', method: 'get' }),

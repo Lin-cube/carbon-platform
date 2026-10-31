@@ -39,6 +39,9 @@
 
         <el-button type="primary" :icon="Refresh" :loading="loading" @click="loadAll">刷新</el-button>
         <el-button :icon="Download" @click="onExport">导出报表</el-button>
+        <el-button type="primary" plain :loading="aiReportLoading" @click="onAiReport">
+          AI 解读
+        </el-button>
       </div>
     </div>
 
@@ -164,6 +167,25 @@
       />
     </div>
   </div>
+
+    <!-- AI 报表解读：narrative 由大模型生成（/api/ai/report） -->
+    <el-dialog v-model="aiReportVisible" title="AI 报表解读" width="640px" append-to-body>
+      <div v-if="aiReportLoading" class="ai-report-loading">
+        <el-skeleton :rows="5" animated />
+      </div>
+      <template v-else>
+        <div class="ai-report-meta">
+          <el-tag size="small" :type="aiReportMode === 'llm' ? 'success' : 'info'" effect="plain">
+            {{ aiReportMode === 'llm' ? '大模型生成' : '模板生成' }}
+          </el-tag>
+          <span class="ai-report-range">{{ aiReportRange }}</span>
+        </div>
+        <p class="ai-report-text">{{ aiReportText || '暂无叙述' }}</p>
+      </template>
+      <template #footer>
+        <el-button @click="aiReportVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
 </template>
 
 <script setup lang="ts">
@@ -173,7 +195,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh, Download } from '@element-plus/icons-vue'
 import EChart from '@/components/EChart.vue'
 import AiInsight from '@/components/AiInsight.vue'
-import { energyApi, analyticsApi } from '@/api'
+import { energyApi, analyticsApi, aiApi } from '@/api'
 import { useAppStore } from '@/stores/app'
 import { fmtNum, fmtInt, type EChartsOption } from '@/utils/echarts'
 import type {
@@ -430,6 +452,36 @@ async function loadSeries() {
   }
 }
 
+// ── AI 报表解读（叙述由大模型生成）──
+const aiReportVisible = ref(false)
+const aiReportLoading = ref(false)
+const aiReportText = ref('')
+const aiReportMode = ref('mock')
+const aiReportRange = ref('')
+
+async function onAiReport() {
+  aiReportVisible.value = true
+  aiReportLoading.value = true
+  aiReportText.value = ''
+  try {
+    const r = await aiApi.report({
+      reportType: 'energy_summary',
+      startDate: app.startDate,
+      endDate: app.endDate,
+      siteId: app.siteId || undefined,
+      withNarrative: true
+    })
+    aiReportText.value = r.narrative || ''
+    aiReportMode.value = r.mode || 'mock'
+    aiReportRange.value = r.timeRange || ''
+  } catch {
+    aiReportText.value = ''
+    ElMessage.error('AI 解读生成失败，请稍后重试')
+  } finally {
+    aiReportLoading.value = false
+  }
+}
+
 async function onExport() {
   try {
     await analyticsApi.exportReport(
@@ -462,6 +514,16 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.ai-report-loading { padding: 8px 0; }
+.ai-report-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.ai-report-range { font-size: 12px; color: #5d6e66; }
+.ai-report-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.95;
+  color: #253d35;
+  white-space: pre-wrap;
+}
 /* ── 页面顶部欢迎信息 ── */
 .dash-head {
   margin-bottom: 14px;
