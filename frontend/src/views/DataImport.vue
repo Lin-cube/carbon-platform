@@ -362,7 +362,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { ElMessage, type UploadFile, type UploadInstance, ElMessageBox } from 'element-plus'
-import { UploadFilled } from '@element-plus/icons-vue'
+import { UploadFilled, QuestionFilled } from '@element-plus/icons-vue'
 // 注意：必须用具名导出的 request()，它返回【已解包】的业务数据。
 // default 导出是裸 axios 实例（service），返回值仍裹着 {code,message,data} 一层，
 // 用它会导致 res.columns 为 undefined（实测踩过）。
@@ -878,5 +878,12 @@ onMounted(async () => {
   white-space: pre-wrap;
   word-break: break-all;
   font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.kpi-help {
+  margin-left: 4px;
+  font-size: 13px;
+  color: #9aa8a0;
+  cursor: help;
+  vertical-align: -2px;
 }
 </style>
