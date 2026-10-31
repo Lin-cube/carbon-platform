@@ -64,7 +64,7 @@ public class AiToolSchema {
                 List.of("buildingId", "startDate", "endDate")));
 
         tools.add(fn(
-                "getBuildingAnomalies", "查询单栋建筑的异常事件：事件数、异常小时、平均/最长持续时长，以及异常事件明细。",
+                "getBuildingAnomalies", "查询「单栋建筑」的异常事件明细：事件数、异常小时、平均/最长持续时长、事件列表。必须指定 buildingId；问全平台/全园区异常概览请用 getAnomalyOverview。",
                 List.of(
                         p("buildingId", "string", "建筑编号"),
                         p("startDate", "string", "开始日期，YYYY-MM-DD"),
@@ -81,12 +81,21 @@ public class AiToolSchema {
                 List.of("startDate", "endDate")));
 
         tools.add(fn(
-                "getTopAnomalyBuildings", "查询异常持续时长最长的建筑排行（单次最长持续小时、事件数、累计异常小时），默认前 10，最多 50。",
+                "getTopAnomalyBuildings", "查询异常「持续时长」最长的建筑排行（单次最长持续小时、事件数、累计异常小时）。仅在用户明确问「哪栋楼异常持续时间最长/最久」时使用；问「有哪些异常」「异常率多少」请用 getAnomalyOverview。",
                 List.of(
                         p("siteId", "string", "园区编号，可空表示全部园区"),
                         p("startDate", "string", "开始日期，YYYY-MM-DD"),
                         p("endDate", "string", "结束日期，YYYY-MM-DD"),
                         p("limit", "integer", "返回条数，默认 10，最大 50")),
+                List.of("startDate", "endDate")));
+
+        tools.add(fn(
+                "getAnomalyOverview", "查询异常总体情况：异常率、异常小时、事件数、异常类型分布（能耗偏高/偏低/持续运行等各自占比）。"
+                        + "回答「有哪些能耗异常」「异常情况如何」「异常率多少」这类概览问题必须用本工具。",
+                List.of(
+                        p("siteId", "string", "园区编号；不填表示全部园区"),
+                        p("startDate", "string", "开始日期，YYYY-MM-DD"),
+                        p("endDate", "string", "结束日期，YYYY-MM-DD")),
                 List.of("startDate", "endDate")));
 
         tools.add(fn(

@@ -96,6 +96,8 @@ public class AiQueryToolService {
                     carbonEmissionSummary(str(a, "siteId"), str(a, "startDate"), str(a, "endDate"));
             case "getTopAnomalyBuildings" ->
                     topAnomalyBuildings(str(a, "siteId"), str(a, "startDate"), str(a, "endDate"), intArg(a, "limit", DEFAULT_LIMIT));
+            case "getAnomalyOverview" ->
+                    anomalyOverview(str(a, "siteId"), str(a, "startDate"), str(a, "endDate"));
             case "listSites" -> listSites();
             case "getTopSites" ->
                     topSites(str(a, "startDate"), str(a, "endDate"), intArg(a, "limit", DEFAULT_LIMIT));
@@ -279,6 +281,64 @@ public class AiQueryToolService {
         out.put("count", rows.size());
         out.put("limit", n);
         out.put("note", "按单次异常最长持续小时降序，duration 单位为小时。");
+        return out;
+    }
+
+    /**
+     * ⑪ 异常总览：异常率/异常小时/事件数 + 异常类型分布。
+     *
+     * <p>回答「有哪些能耗异常」「异常情况怎么样」「异常率多少」这类<b>概览型</b>问题。
+     * 与 getBuildingAnomalies（单栋明细）、getTopAnomalyBuildings（时长排行）区分。
+     */
+    public Map<String, Object> anomalyOverview(String siteId, String startDate, String endDate) {
+        if (StringUtils.hasText(siteId)) {
+            validateSiteId(siteId);
+        }
+        LocalDate[] r = parseRange(startDate, endDate);
+        AnomalyAnalysisVO an = analyticsService.anomalyAnalysis(
+                r[0], r[1], StringUtils.hasText(siteId) ? siteId : null, null);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("siteId", StringUtils.hasText(siteId) ? siteId : "全部园区");
+        out.put("evaluatedHours", an.getEvaluatedHours());
+        out.put("anomalyHours", an.getAnomalyHours());
+        out.put("anomalyRatePct", an.getAnomalyRate());
+        out.put("eventCount", an.getEventCount());
+        out.put("avgDurationHours", an.getAvgDurationHours());
+        out.put("maxDurationHours", an.getMaxDurationHours());
+
+        List<Map<String, Object>> types = new ArrayList<>();
+        if (an.getByType() != null) {
+            for (AnomalyAnalysisVO.ByType t : an.getByType()) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("type", t.getType());
+                m.put("count", t.getCount());
+                m.put("percentage", t.getPercentage());
+                m.put("description", t.getDescription());
+                types.add(m);
+            }
+        }
+        out.put("byType", types);
+
+        List<Map<String, Object>> top = new ArrayList<>();
+        if (an.getTopBuildings() != null) {
+            int n = 0;
+            for (AnomalyAnalysisVO.ByBuilding b : an.getTopBuildings()) {
+                if (n++ >= 3) {
+                    break;
+                }
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("buildingId", b.getBuildingId());
+                m.put("buildingTypeCn", b.getBuildingTypeCn());
+                m.put("siteId", b.getSiteId());
+                m.put("anomalyHours", b.getAnomalyHours());
+                m.put("dominantType", b.getDominantType());
+                top.add(m);
+            }
+        }
+        out.put("topBuildings", top);
+        out.put("note", "byType 是异常类型分布（回答「有哪些异常」用它）；"
+                + "topBuildings 是异常小时最多的前 3 栋；percentage 单位为 %。");
         return out;
     }
 
