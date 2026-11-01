@@ -168,13 +168,14 @@
           </div>
           <el-button link type="danger" size="small" @click="clearImage">移除</el-button>
         </div>
-        <div class="input-row">
+        <div class="input-row" @dragover.prevent @drop.prevent="onDrop">
           <el-button :icon="Picture" circle size="small" class="image-btn"
                      title="上传截图提问（结合截图内容与真实数据回答）"
                      @click="pickImage" />
           <el-input v-model="question" type="textarea" :rows="2" resize="none"
-                    placeholder="用中文提问，例如：2016年有哪些能耗异常？也可点左侧图标上传截图让 AI 解释"
-                    @keydown.enter.exact.prevent="send" />
+                    placeholder="用中文提问；可直接粘贴截图（Ctrl/Cmd+V），或点左侧图标选图"
+                    @keydown.enter.exact.prevent="send"
+                    @paste="onPaste" />
           <el-button type="primary" :icon="Promotion" :loading="sending" :disabled="!canSend"
                      class="send-btn" @click="send">
             发送
@@ -218,18 +219,58 @@ function pickImage() {
   imageInput.value?.click()
 }
 
+/** 选图与粘贴共用同一套校验和预览逻辑 */
+function applyImageFile(f: File): boolean {
+  if (!f.type.startsWith('image/')) {
+    ElMessage.error('只能粘贴图片文件')
+    return false
+  }
+  if (f.size > 5 * 1024 * 1024) {
+    ElMessage.error('截图不能超过 5MB')
+    return false
+  }
+  clearImage()
+  imageFile.value = f
+  imagePreview.value = URL.createObjectURL(f)
+  return true
+}
+
 function onImageChange(e: Event) {
   const input = e.target as HTMLInputElement
   const f = input.files?.[0]
-  if (!f) return
-  if (f.size > 5 * 1024 * 1024) {
-    ElMessage.error('截图不能超过 5MB')
-    input.value = ''
-    return
-  }
-  imageFile.value = f
-  imagePreview.value = URL.createObjectURL(f)
+  if (f) applyImageFile(f)
   input.value = ''
+}
+
+/**
+ * 直接粘贴截图（Ctrl/Cmd+V）。
+ *
+ * 用户截图后通常不会先存文件再选图，粘贴是最短路径。
+ * 只有确实拿到图片时才 preventDefault，避免误吞普通文字的粘贴。
+ */
+function onPaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items || !items.length) return
+  for (const item of items) {
+    if (item.kind === 'file' && item.type.startsWith('image/')) {
+      const f = item.getAsFile()
+      if (!f) continue
+      e.preventDefault()
+      if (applyImageFile(f)) {
+        ElMessage.success('已粘贴截图，输入问题后发送')
+      }
+      return
+    }
+  }
+  // 没有图片：走浏览器默认粘贴（文本）
+}
+
+/** 也支持把图片拖进输入区 */
+function onDrop(e: DragEvent) {
+  const f = e.dataTransfer?.files?.[0]
+  if (f && applyImageFile(f)) {
+    ElMessage.success('已添加截图，输入问题后发送')
+  }
 }
 
 function clearImage() {
