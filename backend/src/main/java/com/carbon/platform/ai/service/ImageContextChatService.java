@@ -27,9 +27,11 @@ import java.util.UUID;
 /**
  * 「截图提问」：用户上传一张看板/图表截图，希望有人解释这段时间发生了什么。
  *
- * <h3>能力边界（必须如实告知用户）</h3>
- * 当前接入的 DeepSeek {@code deepseek-chat} <b>不支持图片输入</b>，
- * 因此系统<b>不解析截图像素</b>。真正做的是：
+ * <h3>实现方式</h3>
+ * 实测 api.deepseek.com 的 {@code deepseek-chat} <b>支持图片输入</b>
+ * （纯红/纯蓝判别、看板截图数字识别均通过），因此本服务直接把截图以
+ * {@code image_url} 交给多模态模型，同时附上该时段的真实数据快照：
+ * 图片负责"用户看到的是什么"，数据负责"真实数值是多少"，二者不一致时以数据为准。
  * <ol>
  *   <li>校验并保存截图（归档，供人工核对）；</li>
  *   <li>取该时间范围（可选建筑）的<b>真实数据快照</b>——
@@ -94,14 +96,17 @@ public class ImageContextChatService {
         }
 
         String imageId = save(image, ext);
+        String dataUrl = toDataUrl(image);
         Map<String, Object> snapshot = buildSnapshot(buildingId, startDate, endDate);
-        String answer = explain(question, snapshot, page, width, height);
+        boolean[] usedVision = {false};
+        String answer = explain(question, snapshot, page, width, height, dataUrl, usedVision);
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("imageId", imageId);
-        out.put("imageAnalyzed", false);
-        out.put("notice", "当前模型（deepseek-chat）不支持图片识别，截图已归档；"
-                + "以下分析基于该时段的真实能耗数据，不是对图片内容的猜测。");
+        out.put("imageAnalyzed", usedVision[0]);
+        out.put("notice", usedVision[0]
+                ? "已结合截图内容与该时段的真实能耗数据作答；若截图与数据不一致，以数据为准。"
+                : "截图已归档，但本次未能调用多模态能力，回答仅基于该时段的真实能耗数据。");
         out.put("snapshot", snapshot);
         out.put("answer", answer);
         return out;
@@ -183,12 +188,13 @@ public class ImageContextChatService {
     // ================================================================ 解释
 
     private String explain(String question, Map<String, Object> snapshot, String page,
-                           int width, int height) {
+                           int width, int height, String dataUrl, boolean[] usedVision) {
         String q = StringUtils.hasText(question) ? question : "这段时间发生了什么？可能是什么原因？有什么建议？";
         StringBuilder user = new StringBuilder();
         user.append("用户上传了一张截图（来源页面：").append(StringUtils.hasText(page) ? page : "未知")
-                .append("，尺寸 ").append(width).append("×").append(height)
-                .append("）。当前模型无法识别图片内容，请只依据下面这份真实数据回答。\n\n");
+                .append("，尺寸 ").append(width).append("×").append(height).append("）。\n");
+        user.append("请先看截图内容，再结合下面这份真实数据回答；")
+                .append("若截图与数据不一致，以数据为准并指出差异。\n\n");
         user.append("【用户问题】").append(q).append("\n\n");
         user.append("【该时段真实数据】\n");
         user.append(toText(snapshot));
@@ -197,22 +203,33 @@ public class ImageContextChatService {
         user.append("2) 指出最值得关注的 2~3 个现象，并说明依据的数据；\n");
         user.append("3) 给出可能原因，标注哪些是推测、需要现场核实；\n");
         user.append("4) 给出可执行的运维建议，按优先级排列；\n");
-        user.append("5) 不要编造数据，不要声称看到图片内容，不要给出未经数据支持的节能比例。\n");
+        user.append("5) 只描述截图中确实可见的内容，不要臆造图中没有的信息；\n");
+        user.append("6) 不要编造数据，不要给出未经数据支持的节能比例。\n");
 
         String system = """
-                你是建筑能源运维分析师。用户截了一张看板图但无法描述细节，
-                你只能依据提供的真实数据作答。
+                你是建筑能源运维分析师。用户截了一张看板/图表并提问。
+                请先描述截图里看到的关键信息（图表走势、数值、异常点），
+                再结合提供的真实数据解释原因并给建议。
                 必须区分「数据事实」与「推测原因」，推测要标注需现场核实。
                 回答控制在 350 字以内，分点，中文。""";
 
         if (llmClient != null && llmClient.available()) {
+            try {
+                String raw = llmClient.chatWithImage(system, user.toString(), dataUrl, 0.3, 900);
+                if (StringUtils.hasText(raw)) {
+                    usedVision[0] = true;
+                    return raw.trim();
+                }
+            } catch (Exception e) {
+                log.warn("截图分析调用多模态模型失败，降级纯数据：{}", e.getMessage());
+            }
             try {
                 String raw = llmClient.chat(system, user.toString(), 0.3, 900);
                 if (StringUtils.hasText(raw)) {
                     return raw.trim();
                 }
             } catch (Exception e) {
-                log.warn("截图分析调用大模型失败：{}", e.getMessage());
+                log.warn("截图分析降级纯文本也失败：{}", e.getMessage());
             }
         }
         return template(snapshot);
@@ -234,6 +251,37 @@ public class ImageContextChatService {
                     .append(String.valueOf(e.getValue())).append("\n");
         }
         return sb.toString();
+    }
+
+    /** 图片转 data URL；宽度超过 1600 时等比缩放，控制 token 与传输体积 */
+    private String toDataUrl(MultipartFile image) {
+        try (InputStream in = image.getInputStream()) {
+            BufferedImage img = ImageIO.read(in);
+            if (img == null) {
+                return null;
+            }
+            int w = img.getWidth();
+            int h = img.getHeight();
+            int maxW = 1600;
+            if (w > maxW) {
+                int nw = maxW;
+                int nh = Math.max(1, (int) Math.round(h * (maxW / (double) w)));
+                BufferedImage scaled = new BufferedImage(nw, nh, BufferedImage.TYPE_INT_RGB);
+                java.awt.Graphics2D g = scaled.createGraphics();
+                g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
+                        java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+                g.drawImage(img, 0, 0, nw, nh, null);
+                g.dispose();
+                img = scaled;
+            }
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            ImageIO.write(img, "png", bos);
+            return "data:image/png;base64,"
+                    + java.util.Base64.getEncoder().encodeToString(bos.toByteArray());
+        } catch (Exception e) {
+            log.warn("图片转 base64 失败：{}", e.getMessage());
+            return null;
+        }
     }
 
     private String save(MultipartFile image, String ext) {

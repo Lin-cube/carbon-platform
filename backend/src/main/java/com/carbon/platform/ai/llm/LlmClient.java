@@ -43,6 +43,17 @@ public interface LlmClient {
      *
      * <p>默认实现忽略 maxTokens，保证既有实现类不受影响。
      */
+    /**
+     * 带图片的对话（多模态）。
+     *
+     * <p>{@code imageDataUrl} 形如 {@code data:image/png;base64,xxxx}。
+     * 默认实现忽略图片、退化为纯文本，保证不支持视觉的实现也能被调用。
+     */
+    default String chatWithImage(String systemPrompt, String userPrompt,
+                                 String imageDataUrl, double temperature, int maxTokens) {
+        return chat(systemPrompt, userPrompt, temperature, maxTokens);
+    }
+
     default String chat(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
         return chat(systemPrompt, userPrompt, temperature);
     }

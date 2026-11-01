@@ -101,6 +101,56 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         return chat(systemPrompt, userPrompt, temperature, maxTokens);
     }
 
+    /**
+     * 多模态对话：把图片以 OpenAI 兼容的 {@code image_url} 形式放进 user 消息。
+     *
+     * <p>实测 api.deepseek.com 的 deepseek-chat 接受该格式并能正确识别图片内容
+     * （纯红/纯蓝判别、看板截图 OCR 均通过）。若服务端不支持，会抛错并由调用方回退。
+     */
+    @Override
+    public String chatWithImage(String systemPrompt, String userPrompt,
+                                String imageDataUrl, double temperature, int limit) {
+        if (!available() || imageDataUrl == null || imageDataUrl.isBlank()) {
+            return chat(systemPrompt, userPrompt, temperature, limit);
+        }
+        try {
+            ObjectNode body = mapper.createObjectNode();
+            body.put("model", model);
+            body.put("temperature", temperature);
+            body.put("stream", false);
+            body.put("max_tokens", Math.max(limit, 64));
+            ArrayNode messages = body.putArray("messages");
+            if (systemPrompt != null && !systemPrompt.isBlank()) {
+                messages.addObject().put("role", "system").put("content", systemPrompt);
+            }
+            ObjectNode user = messages.addObject();
+            user.put("role", "user");
+            ArrayNode content = user.putArray("content");
+            content.addObject().put("type", "text").put("text", userPrompt);
+            ObjectNode img = content.addObject();
+            img.put("type", "image_url");
+            img.putObject("image_url").put("url", imageDataUrl);
+
+            HttpHeaders httpHeaders = new HttpHeaders();
+            httpHeaders.setContentType(MediaType.APPLICATION_JSON);
+            httpHeaders.setBearerAuth(apiKey);
+
+            ResponseEntity<String> resp = restTemplate.exchange(
+                    baseUrl + "/chat/completions", HttpMethod.POST,
+                    new HttpEntity<>(mapper.writeValueAsString(body), httpHeaders), String.class);
+            JsonNode root = mapper.readTree(resp.getBody());
+            String text = root.path("choices").path(0).path("message").path("content").asText(null);
+            if (text == null || text.isBlank()) {
+                log.warn("多模态调用返回空内容，降级为纯文本");
+                return chat(systemPrompt, userPrompt, temperature, limit);
+            }
+            return text;
+        } catch (Exception e) {
+            log.warn("多模态调用失败（降级纯文本）：{}", e.getMessage());
+            return chat(systemPrompt, userPrompt, temperature, limit);
+        }
+    }
+
     @Override
     public String chat(String systemPrompt, String userPrompt, double temperature, int limit) {
         if (!available()) {

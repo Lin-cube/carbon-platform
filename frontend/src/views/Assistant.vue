@@ -164,13 +164,13 @@
           <img :src="imagePreview" alt="截图预览" />
           <div class="image-chip-meta">
             <span>截图已附加</span>
-            <span class="text-dim">发送后将基于该时段真实数据分析</span>
+            <span class="text-dim">将结合截图内容与该时段真实数据回答</span>
           </div>
           <el-button link type="danger" size="small" @click="clearImage">移除</el-button>
         </div>
         <div class="input-row">
           <el-button :icon="Picture" circle size="small" class="image-btn"
-                     title="上传截图提问（当前模型不支持识图，将基于该时段数据回答）"
+                     title="上传截图提问（结合截图内容与真实数据回答）"
                      @click="pickImage" />
           <el-input v-model="question" type="textarea" :rows="2" resize="none"
                     placeholder="用中文提问，例如：2016年有哪些能耗异常？也可点左侧图标上传截图让 AI 解释"
@@ -355,8 +355,7 @@ async function loadStatus() {
 /**
  * 截图提问。
  *
- * 当前模型（deepseek-chat）不支持识图，后端会保存截图并取该时段的真实数据
- * 做分析；返回的 notice 会明确告知用户「不是看图得出的结论」。
+ * 后端把截图交给多模态模型，并附上该时段的真实数据；二者不一致时以数据为准。
  */
 async function sendWithImage(q: string) {
   const file = imageFile.value
