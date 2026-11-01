@@ -151,6 +151,13 @@ public class HybridAiServiceClient implements AiServiceClient {
         return isKnowledge(question);
     }
 
+    /** 答案是否有证据支撑：有任一工具调用或任一引用即算 */
+    private boolean hasEvidence(ChatResponse r) {
+        boolean hasTool = r.getToolCalls() != null && !r.getToolCalls().isEmpty();
+        boolean hasCite = r.getCitations() != null && !r.getCitations().isEmpty();
+        return hasTool || hasCite;
+    }
+
     /** 解析本轮应携带的建筑上下文：显式传入优先，否则用指代消解结果 */
     private String resolveBuildingId(ChatRequest request) {
         if (org.springframework.util.StringUtils.hasText(request.getBuildingId())) {
@@ -214,6 +221,19 @@ public class HybridAiServiceClient implements AiServiceClient {
                 siteId(request), resolveBuildingId(request),
                 request.getStartDate(), request.getEndDate());
         if (tc != null && tc.getAnswer() != null && !tc.getAnswer().isBlank()) {
+            // ★ 无工具调用且无引用 = 答案没有任何证据支撑（模型凭自身知识作答）。
+            //   实测：「冷冻水供回水温差过小说明什么问题」被判为数据类，
+            //   模型 0 工具调用直接作答且 0 引用；而 RAG 对同一问题有 5 条引用。
+            //   这里先用 RAG 补证据：RAG 有引用就采用 RAG 的答案，避免无出处的模型自述。
+            if (!hasEvidence(tc)) {
+                ChatResponse rag = ragEngine.chat(request);
+                if (rag != null && rag.getCitations() != null && !rag.getCitations().isEmpty()
+                        && rag.getAnswer() != null && !rag.getAnswer().isBlank()) {
+                    log.info("模型无工具/无引用，改用 RAG 取证答案：{}", request.getQuestion());
+                    return rag;
+                }
+                log.warn("模型无工具调用且 RAG 无引用，返回无出处答案：{}", request.getQuestion());
+            }
             return tc;
         }
         log.warn("DeepSeek 工具调用不可用，降级本地统计引擎：{}", request.getQuestion());
@@ -381,6 +401,19 @@ public class HybridAiServiceClient implements AiServiceClient {
                 siteId(request), resolveBuildingId(request),
                 request.getStartDate(), request.getEndDate(), onDelta, onTool);
         if (tc != null && tc.getAnswer() != null && !tc.getAnswer().isBlank()) {
+            if (!hasEvidence(tc)) {
+                ChatResponse rag = ragEngine.chat(request);
+                if (rag != null && rag.getCitations() != null && !rag.getCitations().isEmpty()
+                        && rag.getAnswer() != null && !rag.getAnswer().isBlank()) {
+                    // 流式已输出过模型正文，这里追加 RAG 证据版答案会造成割裂，
+                    // 因此仅当模型尚未输出任何正文时才整体替换。
+                    log.info("流式：模型无工具/无引用，改用 RAG 取证答案");
+                    if (onDelta != null) {
+                        onDelta.accept("\n\n（以下内容来自平台知识库检索）\n" + rag.getAnswer());
+                    }
+                    return rag;
+                }
+            }
             return tc;
         }
         log.warn("DeepSeek 流式调用不可用，降级本地统计引擎：{}", request.getQuestion());

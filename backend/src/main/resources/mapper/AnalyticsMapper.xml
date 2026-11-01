@@ -126,7 +126,10 @@
          ============================================================ -->
     <select id="selectCopSummary" resultType="java.util.Map">
         SELECT
-            ROUND(AVG(cop), 3)                AS copAvg,
+            -- 负荷加权 COP = ΣE_hvac / Σ(E_hvac/COP)，与节能模拟口径一致
+            ROUND(SUM(CASE WHEN cop > 0 AND hvac_kwh > 0 THEN hvac_kwh / cop END) , 8) AS hvacOverCop,
+            ROUND(SUM(CASE WHEN cop > 0 AND hvac_kwh > 0 THEN hvac_kwh END), 3)        AS weightedHvacKwh,
+            ROUND(AVG(cop), 3)                AS copAvgSimple,
             ROUND(MAX(cop), 3)                AS copMax,
             ROUND(MIN(cop), 3)                AS copMin,
             ROUND(STDDEV_SAMP(cop), 3)        AS copStd,

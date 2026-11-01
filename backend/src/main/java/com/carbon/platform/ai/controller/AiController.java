@@ -126,15 +126,24 @@ public class AiController {
                         delta -> sendEvent(emitter, "delta", java.util.Map.of("text", delta)),
                         tool -> sendEvent(emitter, "tool", tool));
                 sendEvent(emitter, "done", resp);
-                emitter.complete();
             } catch (Exception e) {
+                sendEvent(emitter, "error",
+                        java.util.Map.of("message", String.valueOf(e.getMessage())));
+            } finally {
+                // 收尾：先发一个注释行再 complete。
+                // 实测只调 complete() 时，curl 会报
+                // "transfer closed with outstanding read data remaining"（(18)）——
+                // 连接在没有干净结束块的情况下被关闭。补一个注释事件后连接可正常收尾。
                 try {
-                    sendEvent(emitter, "error",
-                            java.util.Map.of("message", String.valueOf(e.getMessage())));
+                    emitter.send(SseEmitter.event().comment("stream-end"));
                 } catch (Exception ignore) {
-                    // 客户端可能已断开
+                    // 客户端已断开属正常
                 }
-                emitter.complete();
+                try {
+                    emitter.complete();
+                } catch (Exception ignore) {
+                    // 重复 complete 或已超时，忽略
+                }
             }
         });
         return emitter;

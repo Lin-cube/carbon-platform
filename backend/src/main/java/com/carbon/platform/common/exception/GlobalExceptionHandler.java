@@ -62,6 +62,13 @@ public class GlobalExceptionHandler {
         return R.fail(ResultCode.BAD_REQUEST, "请求体格式错误");
     }
 
+    /** 未知路径：返回 404，而不是被兜底成 500「系统内部错误」 */
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.NOT_FOUND)
+    public R<Void> handleNotFound(org.springframework.web.servlet.resource.NoResourceFoundException e) {
+        return R.fail(ResultCode.NOT_FOUND, "接口不存在：" + e.getResourcePath());
+    }
+
     @ExceptionHandler(AccessDeniedException.class)
     @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.FORBIDDEN)
     public R<Void> handleAccessDenied(AccessDeniedException e) {

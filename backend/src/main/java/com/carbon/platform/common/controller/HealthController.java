@@ -6,6 +6,8 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -23,6 +25,7 @@ import java.util.Map;
 public class HealthController {
 
     private final JdbcTemplate jdbcTemplate;
+    private final com.carbon.platform.energy.imports.service.AggregateRefreshService aggregateRefreshService;
 
     @Operation(summary = "健康检查")
     @GetMapping("/health")
@@ -32,6 +35,41 @@ public class HealthController {
         m.put("time", LocalDateTime.now());
         m.put("service", "carbon-platform-backend");
         return R.ok(m);
+    }
+
+    /**
+     * 维护端点：重算指定区间的预聚合表（日/月/园区时/全局时）与建筑评级。
+     *
+     * <p>【为什么需要】批量数据修正（例如碳排口径统一）后，聚合表仍是旧值；
+     * 而聚合刷新只在导入路径里触发。没有这个入口，数据修正对看板不生效。
+     *
+     * <p>仅 admin 可调用；只重算聚合，不动事实表，也不重算异常标记。
+     */
+    @Operation(summary = "重算预聚合表（仅 admin）")
+    @PostMapping("/maintenance/refresh-aggregates")
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('admin')")
+    public R<Map<String, Object>> refreshAggregates(
+            @RequestParam @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE)
+            java.time.LocalDate startDate,
+            @RequestParam @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE)
+            java.time.LocalDate endDate) {
+
+        java.util.List<String> buildings = jdbcTemplate.queryForList(
+                "SELECT DISTINCT building_id FROM fact_energy_hourly "
+                        + "WHERE stat_date BETWEEN ? AND ?", String.class, startDate, endDate);
+        if (buildings.isEmpty()) {
+            return R.ok(Map.of("skipped", true, "reason", "区间内没有事实数据"));
+        }
+        java.util.Set<String> set = new java.util.LinkedHashSet<>(buildings);
+        Map<String, Object> report = new LinkedHashMap<>(
+                aggregateRefreshService.refresh(set, startDate, endDate));
+        report.put("regrade", aggregateRefreshService.regrade(set));
+        report.put("buildings", set.size());
+        report.put("dateRange", startDate + " ~ " + endDate);
+        invalidateOverviewCache();
+        return R.ok(report);
     }
 
     /**

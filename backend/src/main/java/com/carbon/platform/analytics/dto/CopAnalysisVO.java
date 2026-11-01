@@ -22,6 +22,12 @@ public class CopAnalysisVO {
 
     @Schema(description = "平均 COP")
     private BigDecimal copAvg;
+
+    @Schema(description = "copAvg 的计算口径：负荷加权 / 简单平均（无空调分项）")
+    private String copAvgMethod;
+
+    @Schema(description = "简单平均 COP（仅作对照，不用于对外结论）")
+    private BigDecimal copAvgSimple;
     @Schema(description = "最高 COP")
     private BigDecimal copMax;
     @Schema(description = "最低 COP")

@@ -147,6 +147,22 @@ public class AnalyticsService {
     // ================================================================
     // 统计② COP 计算
     // ================================================================
+
+    /** 负荷加权 COP = ΣE_hvac / Σ(E_hvac/COP)；无有效样本返回 null */
+    private java.math.BigDecimal weightedCop(Map<String, Object> row) {
+        if (row == null) {
+            return null;
+        }
+        java.math.BigDecimal over = dec(row.get("hvacOverCop"));
+        java.math.BigDecimal kwh = dec(row.get("weightedHvacKwh"));
+        if (over == null || kwh == null
+                || over.compareTo(java.math.BigDecimal.ZERO) <= 0
+                || kwh.compareTo(java.math.BigDecimal.ZERO) <= 0) {
+            return null;
+        }
+        return kwh.divide(over, 3, java.math.RoundingMode.HALF_UP);
+    }
+
     public CopAnalysisVO copAnalysis(LocalDate startDate, LocalDate endDate, String buildingId) {
         if (!StringUtils.hasText(buildingId)) {
             throw new BizException(ResultCode.BAD_REQUEST, "COP 分析必须指定建筑（buildingId）");
@@ -167,7 +183,13 @@ public class AnalyticsService {
             return vo;
         }
 
-        vo.setCopAvg(dec(s.get("copAvg")));
+        // ★ 口径统一：COP 取「负荷加权」（ΣE_hvac / Σ(E_hvac/COP)），
+        //   与节能情景模拟使用同一算法，避免同一栋楼两个页面显示不同 COP。
+        //   无有效 hvac 分项时退回简单平均，并在方法说明里标注。
+        java.math.BigDecimal weightedCop = weightedCop(s);
+        vo.setCopAvg(weightedCop != null ? weightedCop : dec(s.get("copAvgSimple")));
+        vo.setCopAvgMethod(weightedCop != null ? "负荷加权" : "简单平均（无空调分项）");
+        vo.setCopAvgSimple(dec(s.get("copAvgSimple")));
         vo.setCopMax(dec(s.get("copMax")));
         vo.setCopMin(dec(s.get("copMin")));
         vo.setCopStd(dec(s.get("copStd")));
