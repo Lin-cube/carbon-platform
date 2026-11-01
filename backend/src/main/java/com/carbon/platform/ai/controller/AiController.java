@@ -120,7 +120,10 @@ public class AiController {
     @PostMapping(value = "/chat/with-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @OperLog(title = "AI-截图提问", businessType = OperLog.BusinessType.QUERY)
     public R<java.util.Map<String, Object>> chatWithImage(
-            @RequestPart("image") org.springframework.web.multipart.MultipartFile image,
+            @RequestParam(value = "images", required = false)
+            org.springframework.web.multipart.MultipartFile[] images,
+            @RequestParam(value = "image", required = false)
+            org.springframework.web.multipart.MultipartFile image,
             @RequestParam(required = false) String question,
             @RequestParam(required = false) String sessionId,
             @RequestParam(required = false) String buildingId,
@@ -131,8 +134,12 @@ public class AiController {
                     iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE)
             java.time.LocalDate endDate,
             @RequestParam(required = false) String page) {
+        // 兼容两种传法：多图用 images（前端新用法），单图用 image（旧调用）
+        org.springframework.web.multipart.MultipartFile[] files =
+                (images != null && images.length > 0) ? images
+                        : (image != null ? new org.springframework.web.multipart.MultipartFile[]{image} : null);
         return R.ok(imageContextChatService.analyze(
-                image, question, sessionId, buildingId, startDate, endDate, page));
+                files, question, sessionId, buildingId, startDate, endDate, page));
     }
 
     @Operation(summary = "流式自然语言问答（SSE）")

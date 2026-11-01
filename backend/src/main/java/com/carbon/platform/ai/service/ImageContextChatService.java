@@ -58,53 +58,73 @@ public class ImageContextChatService {
     private static final long MAX_BYTES = 5L * 1024 * 1024;
     private static final List<String> ALLOWED = List.of("jpg", "jpeg", "png", "webp");
     private static final int MAX_HISTORY_TURNS = 4;
+    /** 一次最多几张截图 */
+    private static final int MAX_IMAGES = 5;
 
     /** 会话历史（sessionId → 最近几轮问答），让截图提问也能追问 */
     private final Map<String, List<String>> history = new ConcurrentHashMap<>();
 
-    public Map<String, Object> analyze(MultipartFile image, String question, String sessionId,
+    public Map<String, Object> analyze(MultipartFile[] files, String question, String sessionId,
                                        String buildingId, LocalDate startDate, LocalDate endDate,
                                        String page) {
-        if (image == null || image.isEmpty()) {
+        if (files == null || files.length == 0) {
             throw new BizException(ResultCode.BAD_REQUEST, "请选择要上传的截图");
         }
-        if (image.getSize() > MAX_BYTES) {
-            throw new BizException(ResultCode.BAD_REQUEST, "截图不能超过 5MB");
-        }
-        String ext = extOf(image.getOriginalFilename());
-        if (!ALLOWED.contains(ext)) {
-            throw new BizException(ResultCode.BAD_REQUEST, "仅支持 jpg / png / webp 截图");
-        }
-        // ★ 先把字节读进内存再复用。
-        //   踩过的坑：MultipartFile.transferTo() 会把临时文件移走，
-        //   之后再 getInputStream() 会失败（日志「图片转 base64 失败」），
-        //   导致多模态调用退化成纯文本、模型答"看不到截图"。
-        byte[] bytes;
-        int width = 0;
-        int height = 0;
-        try {
-            bytes = image.getBytes();
-            BufferedImage img = ImageIO.read(new java.io.ByteArrayInputStream(bytes));
-            if (img == null) {
-                throw new BizException(ResultCode.BAD_REQUEST, "文件不是有效图片");
-            }
-            width = img.getWidth();
-            height = img.getHeight();
-        } catch (BizException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new BizException(ResultCode.BAD_REQUEST, "图片读取失败：" + e.getMessage());
+        if (files.length > MAX_IMAGES) {
+            throw new BizException(ResultCode.BAD_REQUEST, "一次最多上传 " + MAX_IMAGES + " 张截图");
         }
 
-        String imageId = save(bytes, ext);
-        String dataUrl = toDataUrl(bytes);
+        List<String> imageIds = new ArrayList<>();
+        List<String> dataUrls = new ArrayList<>();
+        List<String> sizes = new ArrayList<>();
+
+        for (MultipartFile image : files) {
+            if (image == null || image.isEmpty()) {
+                continue;
+            }
+            if (image.getSize() > MAX_BYTES) {
+                throw new BizException(ResultCode.BAD_REQUEST,
+                        "每张截图不能超过 5MB：" + image.getOriginalFilename());
+            }
+            String ext = extOf(image.getOriginalFilename());
+            if (!ALLOWED.contains(ext)) {
+                throw new BizException(ResultCode.BAD_REQUEST,
+                        "仅支持 jpg / png / webp 截图：" + image.getOriginalFilename());
+            }
+            // ★ 先把字节读进内存再复用。
+            //   MultipartFile.transferTo() 会把临时文件移走，之后再读会失败，
+            //   导致多模态退化成纯文本、模型答"看不到截图"。
+            byte[] bytes;
+            int width;
+            int height;
+            try {
+                bytes = image.getBytes();
+                BufferedImage img = ImageIO.read(new java.io.ByteArrayInputStream(bytes));
+                if (img == null) {
+                    throw new BizException(ResultCode.BAD_REQUEST,
+                            "文件不是有效图片：" + image.getOriginalFilename());
+                }
+                width = img.getWidth();
+                height = img.getHeight();
+            } catch (BizException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new BizException(ResultCode.BAD_REQUEST, "图片读取失败：" + e.getMessage());
+            }
+            imageIds.add(save(bytes, ext));
+            dataUrls.add(toDataUrl(bytes));
+            sizes.add(width + "×" + height);
+        }
+
+        if (dataUrls.isEmpty()) {
+            throw new BizException(ResultCode.BAD_REQUEST, "没有接收到有效图片");
+        }
+
         Map<String, Object> snapshot = buildSnapshot(buildingId, startDate, endDate);
         boolean[] usedVision = {false};
-        String answer = explain(question, snapshot, page, width, height, dataUrl,
-                sessionId, usedVision);
+        String answer = explain(question, snapshot, page, sizes, dataUrls, sessionId, usedVision);
 
         remember(sessionId, question, answer);
-        // 同步一份到文字问答的会话历史，便于后续用文字追问
         try {
             toolCallingService.rememberExchange(sessionId,
                     StringUtils.hasText(question) ? question : "（上传截图）", answer);
@@ -113,10 +133,13 @@ public class ImageContextChatService {
         }
 
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("imageId", imageId);
+        out.put("imageId", imageIds.get(0));
+        out.put("imageIds", imageIds);
+        out.put("imageCount", imageIds.size());
         out.put("imageAnalyzed", usedVision[0]);
         out.put("notice", usedVision[0]
-                ? "已结合截图内容与该时段的真实能耗数据作答；若截图与数据不一致，以数据为准。"
+                ? "已结合 " + imageIds.size() + " 张截图与该时段的真实能耗数据作答；"
+                  + "若截图与数据不一致，以数据为准。"
                 : "截图已归档，但本次未能调用多模态能力，回答仅基于该时段的真实能耗数据。");
         out.put("snapshot", snapshot);
         out.put("answer", answer);
@@ -241,12 +264,15 @@ public class ImageContextChatService {
     // ================================================================ 解释
 
     private String explain(String question, Map<String, Object> snapshot, String page,
-                           int width, int height, String dataUrl,
+                           List<String> sizes, List<String> dataUrls,
                            String sessionId, boolean[] usedVision) {
         String q = StringUtils.hasText(question) ? question : "这张图反映的情况怎么样？可能是什么原因？该怎么处理？";
         StringBuilder user = new StringBuilder();
 
-        List<String> hist = history.getOrDefault(sessionId, List.of());
+        // ConcurrentHashMap 不接受 null 键：未传 sessionId 时直接跳过历史
+        List<String> hist = StringUtils.hasText(sessionId)
+                ? history.getOrDefault(sessionId, List.of())
+                : List.of();
         if (!hist.isEmpty()) {
             user.append("【之前的对话】\n");
             synchronized (hist) {
@@ -257,8 +283,11 @@ public class ImageContextChatService {
             user.append("\n");
         }
 
-        user.append("用户上传了一张截图（来自「").append(StringUtils.hasText(page) ? page : "未知")
-                .append("」页面，尺寸 ").append(width).append("×").append(height).append("）。\n\n");
+        user.append("用户上传了 ").append(dataUrls.size()).append(" 张截图（来自「")
+                .append(StringUtils.hasText(page) ? page : "未知").append("」页面，尺寸分别为 ")
+                .append(String.join("、", sizes)).append("）。\n")
+                .append("请按上传顺序编号为 图1、图2…，逐张说明你看到的内容；")
+                .append("如果多张图是同一页面的不同时间或不同指标，请对比它们之间的差异。\n\n");
         user.append("【用户问题】").append(q).append("\n\n");
         user.append("【该时段真实数据】\n").append(toText(snapshot)).append("\n");
         user.append("""
@@ -283,7 +312,7 @@ public class ImageContextChatService {
 
         if (llmClient != null && llmClient.available()) {
             try {
-                String raw = llmClient.chatWithImage(system, user.toString(), dataUrl, 0.25, 1100);
+                String raw = llmClient.chatWithImages(system, user.toString(), dataUrls, 0.25, 1400);
                 if (StringUtils.hasText(raw)) {
                     usedVision[0] = true;
                     return raw.trim();

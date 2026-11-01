@@ -54,6 +54,19 @@ public interface LlmClient {
         return chat(systemPrompt, userPrompt, temperature, maxTokens);
     }
 
+    /**
+     * 多图对话：一次最多 5 张。默认实现只用第一张，保证不支持多图的实现也能跑。
+     */
+    default String chatWithImages(String systemPrompt, String userPrompt,
+                                  java.util.List<String> imageDataUrls,
+                                  double temperature, int maxTokens) {
+        if (imageDataUrls == null || imageDataUrls.isEmpty()) {
+            return chat(systemPrompt, userPrompt, temperature, maxTokens);
+        }
+        return chatWithImage(systemPrompt, userPrompt,
+                imageDataUrls.get(0), temperature, maxTokens);
+    }
+
     default String chat(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
         return chat(systemPrompt, userPrompt, temperature);
     }

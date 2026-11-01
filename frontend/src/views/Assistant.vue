@@ -160,20 +160,28 @@
 
       <!-- 输入框：浅色玻璃卡片，固定于对话区底部 -->
       <div class="input-bar">
-        <div v-if="imagePreview" class="image-chip">
-          <img :src="imagePreview" alt="截图预览" />
-          <div class="image-chip-meta">
-            <span>截图已附加</span>
+        <div v-if="imageFiles.length" class="image-strip">
+          <div class="image-strip-head">
+            <span>已附加 {{ imageFiles.length }}/{{ MAX_IMAGES }} 张截图</span>
             <span class="text-dim">将结合截图内容与该时段真实数据回答</span>
+            <el-button link type="danger" size="small" @click="clearImages">全部移除</el-button>
           </div>
-          <el-button link type="danger" size="small" @click="clearImage">移除</el-button>
+          <div class="image-thumbs">
+            <div v-for="(src, idx) in imagePreviews" :key="idx" class="thumb">
+              <img :src="src" :alt="`截图${idx + 1}`" />
+              <span class="thumb-idx">{{ idx + 1 }}</span>
+              <button class="thumb-del" title="移除这张" @click="removeImage(idx)">×</button>
+            </div>
+            <button v-if="imageFiles.length < MAX_IMAGES" class="thumb thumb-add"
+                    title="继续添加截图" @click="pickImage">+</button>
+          </div>
         </div>
         <div class="input-row" @dragover.prevent @drop.prevent="onDrop">
           <el-button :icon="Picture" circle size="small" class="image-btn"
                      title="上传截图提问（结合截图内容与真实数据回答）"
                      @click="pickImage" />
           <el-input v-model="question" type="textarea" :rows="2" resize="none"
-                    placeholder="用中文提问；可直接粘贴截图（Ctrl/Cmd+V），或点左侧图标选图"
+                    placeholder="用中文提问；可直接粘贴截图（Ctrl/Cmd+V），或点左侧图标选图（最多 5 张）"
                     @keydown.enter.exact.prevent="send"
                     @paste="onPaste" />
           <el-button type="primary" :icon="Promotion" :loading="sending" :disabled="!canSend"
@@ -212,72 +220,92 @@ const question = ref('')
 const sending = ref(false)
 // 截图提问
 const imageInput = ref<HTMLInputElement>()
-const imageFile = ref<File | null>(null)
-const imagePreview = ref('')
+const MAX_IMAGES = 5
+const imageFiles = ref<File[]>([])
+const imagePreviews = ref<string[]>([])
 
 function pickImage() {
   imageInput.value?.click()
 }
 
-/** 选图与粘贴共用同一套校验和预览逻辑 */
-function applyImageFile(f: File): boolean {
-  if (!f.type.startsWith('image/')) {
-    ElMessage.error('只能粘贴图片文件')
-    return false
+/**
+ * 追加图片：选图 / 粘贴 / 拖拽共用。
+ * 一次最多 5 张，超出部分丢弃并提示，不静默吞掉。
+ */
+function addImageFiles(files: File[]): number {
+  let added = 0
+  for (const f of files) {
+    if (imageFiles.value.length >= MAX_IMAGES) {
+      ElMessage.warning(`最多 ${MAX_IMAGES} 张截图，多余的未添加`)
+      break
+    }
+    if (!f.type.startsWith('image/')) {
+      ElMessage.error(`只能添加图片：${f.name || '未知文件'}`)
+      continue
+    }
+    if (f.size > 5 * 1024 * 1024) {
+      ElMessage.error(`截图不能超过 5MB：${f.name || ''}`)
+      continue
+    }
+    imageFiles.value.push(f)
+    imagePreviews.value.push(URL.createObjectURL(f))
+    added++
   }
-  if (f.size > 5 * 1024 * 1024) {
-    ElMessage.error('截图不能超过 5MB')
-    return false
-  }
-  clearImage()
-  imageFile.value = f
-  imagePreview.value = URL.createObjectURL(f)
-  return true
+  return added
 }
 
 function onImageChange(e: Event) {
   const input = e.target as HTMLInputElement
-  const f = input.files?.[0]
-  if (f) applyImageFile(f)
+  const list = Array.from(input.files || [])
+  if (list.length) {
+    const n = addImageFiles(list)
+    if (n) ElMessage.success(`已添加 ${n} 张截图`)
+  }
   input.value = ''
 }
 
 /**
- * 直接粘贴截图（Ctrl/Cmd+V）。
- *
- * 用户截图后通常不会先存文件再选图，粘贴是最短路径。
+ * 直接粘贴截图（Ctrl/Cmd+V），支持一次粘贴多张。
  * 只有确实拿到图片时才 preventDefault，避免误吞普通文字的粘贴。
  */
 function onPaste(e: ClipboardEvent) {
   const items = e.clipboardData?.items
   if (!items || !items.length) return
+  const pics: File[] = []
   for (const item of items) {
     if (item.kind === 'file' && item.type.startsWith('image/')) {
       const f = item.getAsFile()
-      if (!f) continue
-      e.preventDefault()
-      if (applyImageFile(f)) {
-        ElMessage.success('已粘贴截图，输入问题后发送')
-      }
-      return
+      if (f) pics.push(f)
     }
   }
-  // 没有图片：走浏览器默认粘贴（文本）
+  if (!pics.length) return
+  e.preventDefault()
+  const n = addImageFiles(pics)
+  if (n) ElMessage.success(`已粘贴 ${n} 张截图，输入问题后发送`)
 }
 
-/** 也支持把图片拖进输入区 */
+/** 也支持把多张图片拖进输入区 */
 function onDrop(e: DragEvent) {
-  const f = e.dataTransfer?.files?.[0]
-  if (f && applyImageFile(f)) {
-    ElMessage.success('已添加截图，输入问题后发送')
-  }
+  const list = Array.from(e.dataTransfer?.files || [])
+  if (!list.length) return
+  const n = addImageFiles(list)
+  if (n) ElMessage.success(`已添加 ${n} 张截图`)
 }
 
-function clearImage() {
-  if (imagePreview.value) URL.revokeObjectURL(imagePreview.value)
-  imageFile.value = null
-  imagePreview.value = ''
+function removeImage(idx: number) {
+  const url = imagePreviews.value[idx]
+  if (url) URL.revokeObjectURL(url)
+  imageFiles.value.splice(idx, 1)
+  imagePreviews.value.splice(idx, 1)
 }
+
+function clearImages() {
+  imagePreviews.value.forEach((u) => URL.revokeObjectURL(u))
+  imageFiles.value = []
+  imagePreviews.value = []
+}
+
+
 const listEl = ref<HTMLDivElement>()
 const buildings = ref<BuildingRow[]>([])
 /** 上一次提问（用于失败重试） */
@@ -314,7 +342,7 @@ const capabilities = [
   { label: '节能建议', icon: 'TrendCharts', desc: '数据驱动的优化措施', q: 'Hog_office_Sydney 有哪些可落地的优化建议？' }
 ]
 
-const canSend = computed(() => !!question.value.trim() && !sending.value)
+const canSend = computed(() => (!!question.value.trim() || imageFiles.value.length > 0) && !sending.value)
 
 // ---------------------------------------------------------------- 展示辅助
 function evidenceRows(res?: ChatResponse) {
@@ -399,9 +427,9 @@ async function loadStatus() {
  * 后端把截图交给多模态模型，并附上该时段的真实数据；二者不一致时以数据为准。
  */
 async function sendWithImage(q: string) {
-  const file = imageFile.value
-  if (!file) return
-  push({ role: 'user', text: (q || '这段时间发生了什么？有什么建议？') + '\n（附截图）' })
+  const files = [...imageFiles.value]
+  if (!files.length) return
+  push({ role: 'user', text: (q || '这段时间发生了什么？有什么建议？') + `\n（附 ${files.length} 张截图）` })
   lastQuestion.value = q
   question.value = ''
   sending.value = true
@@ -412,7 +440,7 @@ async function sendWithImage(q: string) {
 
   try {
     const fd = new FormData()
-    fd.append('image', file)
+    for (const f of files) fd.append('images', f)
     fd.append('question', q || '这段时间发生了什么？可能是什么原因？有什么建议？')
     fd.append('sessionId', sessionId.value)
     if (ctxBuildingId.value) fd.append('buildingId', ctxBuildingId.value)
@@ -437,7 +465,7 @@ async function sendWithImage(q: string) {
     item.error = 'failed'
   } finally {
     sending.value = false
-    clearImage()
+    clearImages()
     scrollToBottom()
   }
 }
@@ -467,8 +495,8 @@ function parseSse(block: string): { event: string; data: any } | null {
  */
 async function send() {
   const q = question.value.trim()
-  if ((!q && !imageFile.value) || sending.value) return
-  if (imageFile.value) {
+  if ((!q && !imageFiles.value.length) || sending.value) return
+  if (imageFiles.value.length) {
     await sendWithImage(q)
     return
   }
@@ -915,4 +943,63 @@ onMounted(async () => {
   border: 1px solid #e3efe8;
 }
 .image-chip-meta { display: flex; flex-direction: column; font-size: 12px; line-height: 1.5; }
+
+/* 多图预览条 */
+.image-strip { margin-bottom: 8px; }
+.image-strip-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: #253d35;
+  margin-bottom: 6px;
+}
+.image-thumbs { display: flex; gap: 8px; flex-wrap: wrap; }
+.thumb {
+  position: relative;
+  width: 76px;
+  height: 56px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #dfe9e3;
+  background: #f6faf8;
+}
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb-idx {
+  position: absolute;
+  left: 3px;
+  bottom: 3px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: rgba(37, 61, 53, .72);
+  color: #fff;
+}
+.thumb-del {
+  position: absolute;
+  right: 2px;
+  top: 2px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(37, 61, 53, .66);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.thumb-del:hover { background: #c26b62; }
+.thumb-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: #7fa894;
+  cursor: pointer;
+  border-style: dashed;
+}
+.thumb-add:hover { color: #4f9d77; border-color: #9cc9b0; }
 </style>
