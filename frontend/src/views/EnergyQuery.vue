@@ -64,6 +64,9 @@
           <div class="filter-actions">
             <el-button type="primary" :icon="Search" :loading="loading" @click="loadAll">查询</el-button>
             <el-button :icon="Refresh" @click="onReset">重置</el-button>
+            <el-button :icon="Warning" :disabled="!diagnosisTarget" @click="gotoDiagnosis">
+              查看异常诊断
+            </el-button>
           </div>
         </div>
 
@@ -180,9 +183,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Refresh, Search, Download } from '@element-plus/icons-vue'
+import { Warning, Refresh, Search, Download } from '@element-plus/icons-vue'
 import EChart from '@/components/EChart.vue'
 import { energyApi } from '@/api'
 import { useDataVersionRefresh } from '@/composables/useDataVersionRefresh'
@@ -217,6 +220,24 @@ const granularityCn = computed(() =>
   ({ hourly: '小时', daily: '日', monthly: '月' })[granularity.value])
 const metricCn = computed(() =>
   ({ electricity: '用电量', hvac: '空调能耗', water: '用水量', carbon: '碳排' })[metric.value])
+const router = useRouter()
+
+/** 只有选中单栋建筑时才能跳转异常诊断 */
+const diagnosisTarget = computed(() => (buildingIds.value.length === 1 ? buildingIds.value[0] : ''))
+
+function gotoDiagnosis() {
+  if (!diagnosisTarget.value) return
+  router.push({
+    path: '/anomaly',
+    query: {
+      buildingId: diagnosisTarget.value,
+      startDate: range.value?.[0],
+      endDate: range.value?.[1]
+    }
+  })
+}
+
+
 const rangeText = computed(() => `${range.value?.[0] || '--'} ~ ${range.value?.[1] || '--'}`)
 
 /** 主趋势图绘制字段：与指标下拉联动 */

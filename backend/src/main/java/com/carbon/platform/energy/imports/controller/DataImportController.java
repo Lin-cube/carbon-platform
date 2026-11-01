@@ -39,6 +39,7 @@ public class DataImportController {
     /** 回滚批次后需要刷新预聚合表，否则看板仍显示已删除的数据 */
     private final com.carbon.platform.energy.imports.service.AggregateRefreshService aggregateRefreshService;
     private final com.carbon.platform.energy.imports.service.AnomalyDetectionService anomalyDetectionService;
+    private final com.carbon.platform.analytics.diagnosis.AnomalyDiagnosisService anomalyDiagnosisService;
     private final com.carbon.platform.energy.imports.service.ImportAuditExportService auditExportService;
 
     @Operation(summary = "批量上传：多文件自动分类 + 自动字段映射")
@@ -292,6 +293,19 @@ public class DataImportController {
         // 审计：把该批次标记为已回滚（保留记录，不删除，符合审计要求）
         jdbcTemplate.update(
                 "UPDATE data_import_log SET status = '已回滚' WHERE id = ?", id);
+
+        // 数据被删除，基于这些数据生成的 AI 诊断必须失效，否则会展示过期结论
+        try {
+            if (deleted > 0 && range != null && range.get("minDate") != null && !blds.isEmpty()) {
+                java.time.LocalDate min = toLocalDate(range.get("minDate"));
+                java.time.LocalDate max = toLocalDate(range.get("maxDate"));
+                if (min != null && max != null) {
+                    anomalyDiagnosisService.invalidate(blds, min, max, "批次已回滚 " + batchNo);
+                }
+            }
+        } catch (Exception e) {
+            // 失效标记失败不影响回滚
+        }
         healthControllerInvalidate();
 
         Map<String, Object> out = new LinkedHashMap<>();

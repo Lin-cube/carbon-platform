@@ -117,6 +117,67 @@ export const anomalyHandleApi = {
 }
 
 // ---------------------------------------------------------------- AI 助手
+/** AI 诊断记录（持久化 + 复用 + 重新分析） */
+export const diagnosisApi = {
+  generate: (params: { buildingId: string; anomalyId?: number; startDate: string; endDate: string; force?: boolean }) =>
+    request<DiagnosisRecord>({ url: '/diagnosis', method: 'post', params }),
+  history: (params: { buildingId?: string; anomalyId?: number; limit?: number }) =>
+    request<DiagnosisRecord[]>({ url: '/diagnosis', method: 'get', params }),
+  detail: (id: number) => request<DiagnosisRecord>({ url: `/diagnosis/${id}`, method: 'get' })
+}
+
+/** 处置后复检 */
+export const verifyApi = {
+  verify: (anomalyId: number) =>
+    request<VerifyResult>({ url: `/anomalies/${anomalyId}/verify`, method: 'post' }),
+  history: (anomalyId: number, limit = 10) =>
+    request<VerifyResult[]>({ url: `/anomalies/${anomalyId}/verifications`, method: 'get', params: { limit } })
+}
+
+export interface DiagnosisRecord {
+  id: number
+  buildingId: string
+  anomalyId?: number
+  startDate: string
+  endDate: string
+  summary: string
+  evidence?: Record<string, unknown>
+  causes?: Array<Record<string, unknown>>
+  actions?: string[]
+  topEvents?: Array<Record<string, unknown>>
+  model?: string
+  mode?: string
+  status: string
+  invalidReason?: string
+  createdAt: string
+  reused?: boolean
+}
+
+export interface VerifyResult {
+  id: number
+  anomalyId: number
+  conclusion: 'IMPROVED' | 'STILL_ANOMALY' | 'INSUFFICIENT'
+  conclusionText: string
+  reason: string
+  preAvgKwh: number
+  preBaseline: number
+  preDeviationPct: number | null
+  postAvgKwh: number
+  postBaseline: number
+  postDeviationPct: number | null
+  changePct: number | null
+  basis?: {
+    preWindow?: string
+    postWindow?: string
+    eventWindow?: string
+    preHours?: number
+    postHours?: number
+    preAvgTemp?: number
+    postAvgTemp?: number
+    caveats?: string[]
+  }
+}
+
 export const aiApi = {
   chat: (data: {
     question: string; sessionId?: string

@@ -119,6 +119,12 @@ public interface AnalyticsMapper {
                                                       @Param("endDate") LocalDate endDate);
 
     /** 异常时段 vs 正常时段对比（用于归因）—— UNION ALL 返回 2 行 */
+    /** 诊断用：最值得关注的 TOP N 异常事件（综合偏离度与持续时长） */
+    List<Map<String, Object>> selectTopAnomalyEvents(@Param("buildingIds") List<String> buildingIds,
+                                                     @Param("startDate") LocalDate startDate,
+                                                     @Param("endDate") LocalDate endDate,
+                                                     @Param("limit") int limit);
+
     List<Map<String, Object>> selectAnomalyVsNormal(@Param("buildingIds") List<String> buildingIds,
                                                      @Param("startDate") LocalDate startDate,
                                                      @Param("endDate") LocalDate endDate);

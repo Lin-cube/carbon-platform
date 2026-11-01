@@ -53,6 +53,8 @@ public class DataImportService {
     private final AnomalyDetectionService anomalyDetectionService;
     /** 导入后需要清空看板 AI 解读缓存，否则解读仍基于旧数据 */
     private final com.carbon.platform.ai.service.DashboardInsightService dashboardInsightService;
+    /** 导入后让相关 AI 诊断失效，避免展示过期结论 */
+    private final com.carbon.platform.analytics.diagnosis.AnomalyDiagnosisService anomalyDiagnosisService;
     /** 编程式事务：用于「按块提交」，不用 @Transactional 把整次导入包成长事务 */
     private final org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
@@ -700,6 +702,18 @@ public class DataImportService {
                 dashboardInsightService.invalidate();
             } catch (Exception ignore) {
                 // 缓存失效失败不影响导入
+            }
+            // 数据变了，之前基于旧数据生成的 AI 诊断必须标失效，
+            // 否则用户会看到「旧结论」当成最新结果。
+            try {
+                if (result.getStartDate() != null) {
+                    anomalyDiagnosisService.invalidate(affectedBuildings,
+                            java.time.LocalDate.parse(result.getStartDate()),
+                            java.time.LocalDate.parse(result.getEndDate()),
+                            "数据导入 " + result.getBatchNo());
+                }
+            } catch (Exception e) {
+                log.warn("诊断失效标记失败（不影响导入）：{}", e.getMessage());
             }
             finalizeJob(result, req, rules, failed);
             return result;

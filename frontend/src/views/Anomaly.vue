@@ -344,6 +344,80 @@
                 </el-timeline-item>
               </el-timeline>
           </div>
+
+            <!-- AI 诊断记录（持久化 + 复用 + 重新分析） -->
+            <div class="handle-section">
+              <div class="chart-title mt-12">
+                AI 诊断记录
+                <el-tag v-if="diagRecord" size="small" style="margin-left: 8px"
+                        :type="diagRecord.status === 'VALID' ? 'success' : 'info'">
+                  {{ diagRecord.status === 'VALID' ? (diagRecord.reused ? '复用缓存' : '已保存') : '已过期' }}
+                </el-tag>
+                <span v-if="diagRecord?.createdAt" class="text-dim" style="font-size: 12px; margin-left: 8px">
+                  {{ String(diagRecord.createdAt).slice(0, 19) }}
+                </span>
+              </div>
+
+              <el-empty v-if="!diagRecord" description="暂无保存的诊断，点下方按钮生成" :image-size="56" />
+              <div v-else class="diag-box">
+                <div class="diag-text">{{ diagRecord.summary }}</div>
+                <div v-if="diagRecord.invalidReason" class="diag-warn">
+                  {{ diagRecord.invalidReason }}，结论已过期，请重新分析
+                </div>
+              </div>
+
+              <div class="mt-12" style="display: flex; gap: 8px; flex-wrap: wrap">
+                <el-button type="primary" :loading="diagSaving" @click="generateDiagnosis(false)">
+                  {{ diagRecord ? '重新获取' : '生成诊断' }}
+                </el-button>
+                <el-button :loading="diagSaving" :disabled="!diagRecord" @click="generateDiagnosis(true)">
+                  重新分析
+                </el-button>
+                <el-button text @click="showDiagHistory = !showDiagHistory">
+                  历史诊断（{{ diagHistory.length }}）
+                </el-button>
+              </div>
+
+              <el-collapse-transition>
+                <div v-show="showDiagHistory" style="margin-top: 10px">
+                  <el-timeline>
+                    <el-timeline-item v-for="h in diagHistory" :key="h.id"
+                                      :timestamp="`${String(h.createdAt).slice(0, 19)} · ${h.mode || ''}`"
+                                      placement="top">
+                      <div style="font-size: 12.5px">
+                        <el-tag size="small" :type="h.status === 'VALID' ? 'success' : 'info'">
+                          {{ h.status === 'VALID' ? '有效' : '已过期' }}
+                        </el-tag>
+                        <span class="text-dim"> {{ String(h.summary || '').slice(0, 60) }}…</span>
+                      </div>
+                    </el-timeline-item>
+                  </el-timeline>
+                </div>
+              </el-collapse-transition>
+
+              <!-- 处置后复检 -->
+              <div class="chart-title mt-12">处置后复检</div>
+              <el-button :loading="verifying" @click="runVerify">执行复检</el-button>
+              <div v-if="verifyResult" class="verify-box mt-12">
+                <el-tag :type="verifyResult.conclusion === 'IMPROVED' ? 'success'
+                             : verifyResult.conclusion === 'STILL_ANOMALY' ? 'danger' : 'warning'">
+                  {{ verifyResult.conclusionText }}
+                </el-tag>
+                <div class="verify-reason">{{ verifyResult.reason }}</div>
+                <el-descriptions :column="2" size="small" border style="margin-top: 8px">
+                  <el-descriptions-item label="处理前均耗">{{ verifyResult.preAvgKwh }} kWh</el-descriptions-item>
+                  <el-descriptions-item label="处理后均耗">{{ verifyResult.postAvgKwh }} kWh</el-descriptions-item>
+                  <el-descriptions-item label="处理前偏差">{{ verifyResult.preDeviationPct ?? '--' }}%</el-descriptions-item>
+                  <el-descriptions-item label="处理后偏差">{{ verifyResult.postDeviationPct ?? '--' }}%</el-descriptions-item>
+                  <el-descriptions-item label="变化">{{ verifyResult.changePct ?? '--' }}%</el-descriptions-item>
+                  <el-descriptions-item label="样本">{{ verifyResult.basis?.preHours }}h / {{ verifyResult.basis?.postHours }}h</el-descriptions-item>
+                </el-descriptions>
+                <div class="verify-caveat" v-for="(c, idx) in (verifyResult.basis?.caveats || [])" :key="idx">
+                  · {{ c }}
+                </div>
+              </div>
+            </div>
+
     </el-drawer>
 
     <!-- 优化建议抽屉（快捷入口，聚焦建议） -->
@@ -392,7 +466,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Refresh, Search } from '@element-plus/icons-vue'
-import { analyticsApi, anomalyHandleApi, energyApi } from '@/api'
+import { analyticsApi, anomalyHandleApi, diagnosisApi, verifyApi, energyApi } from '@/api'
 import AiInsight from '@/components/AiInsight.vue'
 import { useDataVersionRefresh } from '@/composables/useDataVersionRefresh'
 import { useAppStore } from '@/stores/app'
@@ -663,8 +737,80 @@ async function submitHandle() {
 }
 
 
+// ── AI 诊断记录（持久化） ──
+const diagRecord = ref<Record<string, any> | null>(null)
+const diagHistory = ref<Record<string, any>[]>([])
+const diagSaving = ref(false)
+const showDiagHistory = ref(false)
+
+// ── 处置后复检 ──
+const verifying = ref(false)
+const verifyResult = ref<Record<string, any> | null>(null)
+
+/** 打开抽屉时只读缓存：有有效记录就直接展示，不主动调大模型 */
+async function loadDiagnosis() {
+  if (!current.value) return
+  diagRecord.value = null
+  diagHistory.value = []
+  verifyResult.value = null
+  try {
+    const list = await diagnosisApi.history({
+      buildingId: current.value.buildingId,
+      anomalyId: current.value.id,
+      limit: 10
+    })
+    diagHistory.value = list || []
+    const valid = (list || []).find((x) => x.status === 'VALID')
+    diagRecord.value = valid || (list || [])[0] || null
+  } catch {
+    /* 无历史不影响抽屉 */
+  }
+}
+
+async function generateDiagnosis(force: boolean) {
+  if (!current.value) return
+  diagSaving.value = true
+  try {
+    const rec = await diagnosisApi.generate({
+      buildingId: current.value.buildingId,
+      anomalyId: current.value.id,
+      startDate: range.value?.[0] || app.startDate,
+      endDate: range.value?.[1] || app.endDate,
+      force
+    })
+    diagRecord.value = rec
+    ElMessage.success(force ? '已重新分析并保存' : (rec.reused ? '已复用有效诊断' : '诊断已生成并保存'))
+    const list = await diagnosisApi.history({
+      buildingId: current.value.buildingId,
+      anomalyId: current.value.id,
+      limit: 10
+    })
+    diagHistory.value = list || []
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    diagSaving.value = false
+  }
+}
+
+async function runVerify() {
+  if (!current.value) return
+  verifying.value = true
+  try {
+    verifyResult.value = await verifyApi.verify(current.value.id)
+    ElMessage.success(`复检完成：${verifyResult.value?.conclusionText || ''}`)
+    loadDiagnosis()
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    verifying.value = false
+  }
+}
+
+
 async function openDiagnose(row: AnomalyEvent) {
   // 诊断抽屉同时承载处置入口：静默加载该异常的处置详情
+    void loadDiagnosis()
   void openHandle(row)
   current.value = row
   diagnose.value = null
@@ -736,12 +882,18 @@ onMounted(async () => {
     /* 忽略 */
   }
 
-  // 3D 园区页通过 /anomaly?buildingId=xxx 跳转过来，需要预选该建筑
-  const q = route.query.buildingId
-  if (typeof q === 'string' && q) {
-    buildingId.value = q
-    ElMessage.info(`已按 3D 园区传入的建筑预选：${q}`)
-  }
+    // 3D 园区页通过 /anomaly?buildingId=xxx 跳转过来，需要预选该建筑
+    const q = route.query.buildingId
+    if (typeof q === 'string' && q) {
+      buildingId.value = q
+      ElMessage.info(`已按 3D 园区传入的建筑预选：${q}`)
+    }
+    // 其它页面（能耗查询、看板）会一起带上时间范围，这里沿用，保持口径一致
+    const qs = route.query.startDate
+    const qe = route.query.endDate
+    if (typeof qs === 'string' && typeof qe === 'string' && qs && qe) {
+      range.value = [qs, qe]
+    }
 
   await loadBuildings()
   await loadEvents()
@@ -819,4 +971,12 @@ onMounted(async () => {
 .handle-dot.hs-processing { background: #D18F5F; }
 .handle-dot.hs-ignored { background: #9aa8a0; }
 .handle-dot.hs-verify { background: #5B8FA8; }
+
+/* 诊断记录与复检 */
+.diag-box { padding: 10px 12px; border-radius: 10px; background: #f6faf8; border: 1px solid #e3efe8; }
+.diag-text { font-size: 13px; line-height: 1.75; color: #253d35; white-space: pre-wrap; }
+.diag-warn { margin-top: 8px; font-size: 12px; color: #c26b62; }
+.verify-box { padding: 10px 12px; border-radius: 10px; background: #fbfdfc; border: 1px solid #e6efea; }
+.verify-reason { margin-top: 6px; font-size: 12.5px; color: #4a5f57; }
+.verify-caveat { margin-top: 6px; font-size: 12px; color: #8a9a92; line-height: 1.6; }
 </style>

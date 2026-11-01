@@ -327,8 +327,13 @@ const panelCollapsed = ref(false)
 
 /** 点击 AI 解读里的异常建筑 → 跳到异常诊断页并自动诊断该建筑 */
 function onFocusBuilding(buildingId: string) {
-  router.push({ path: '/anomaly', query: { buildingId } })
+  router.push({ path: '/anomaly', query: { buildingId, ...dateQuery() } })
 }
+/** 跳转异常页时带上当前时间范围，保证口径一致 */
+function dateQuery(): Record<string, string> {
+  return { startDate: app.startDate, endDate: app.endDate }
+}
+
 const buildings = ref<BuildingRow[]>([])
 const loading = ref(false)
 const colorBy = ref<'grade' | 'eui' | 'anomaly'>('grade')
@@ -1037,7 +1042,7 @@ function gotoEnergyDetail() {
 }
 function gotoDiagnosis() {
   if (!selected.value) return
-  router.push({ path: '/anomaly', query: { buildingId: selected.value.buildingId } })
+  router.push({ path: '/anomaly', query: { buildingId: selected.value.buildingId, ...dateQuery() } })
 }
 
 /**
@@ -1223,7 +1228,7 @@ async function refreshBuildings() {
 useDataVersionRefresh(() => refreshBuildings())
 
 function gotoAnomaly() {
-  router.push({ path: '/anomaly', query: { buildingId: selected.value?.buildingId } })
+  router.push({ path: '/anomaly', query: { buildingId: selected.value?.buildingId, ...dateQuery() } })
 }
 
 onMounted(async () => {

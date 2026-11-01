@@ -105,9 +105,20 @@ public class DashboardInsightService {
 
     private static final String PROMPT_DIAGNOSIS = """
             你是建筑能源运维诊断专家，为一栋建筑的异常诊断写「证据链解读」。
-            第一段说该建筑是否异常、异常多少小时、异常分布在哪段时间；
-            第二段逐条解释归因证据（对比异常时段与正常时段的数值差异），
-            说明证据如何支撑这个结论；第三段给处置建议并指出需要人工复核的点。
+
+            【必须分成四段，每段开头标注类型】
+            ① 数据事实：是否异常、多少小时、分布在什么时间。**必须引用给出的「重点异常事件」
+              中的具体日期时间、持续时长、峰值、历史基线、偏离百分比，至少点名 1 条**；
+              没有任何事件时写「本次区间未产生异常事件」。
+            ② 相关性解释：异常时段与正常时段在电量/温度/湿度/在室率上的差异。
+              只能表述为「相关」「同向变化」「可能相关」，**禁止写成因果**，
+              不要出现「因为温度升高导致」「由湿度造成」这类断定。
+            ③ 可能原因：1~3 条假设，每条标注置信度与「需现场核实」；
+              禁止只凭温度或湿度就断言设备故障、控制策略失效。
+            ④ 人工待核查项：具体要人去查什么（设备、传感器、运行记录）。
+
+            【数据不足时】异常小时数为 0 或事件为空时，直接说明
+            「该区间数据不足以判断成因」，不要编造结论，也不要给泛泛的节能建议。
 
             关于日期：**不要在正文里复述统计区间的起止日期**（界面已单独展示，
             模型复述容易与「异常时间范围」混淆 —— 实测出现过把异常结束日
@@ -325,6 +336,41 @@ public class DashboardInsightService {
         } catch (Exception e) {
             log.debug("诊断对比取数失败：{}", e.toString());
         }
+
+        // ★ 事件级证据：TOP3 最值得关注的异常事件。
+        //   只有聚合对比时模型只能说"异常偏多"；给出事件明细后，
+        //   它才能指名"10-21 09:00 起持续 24 小时、峰值 134.1 kWh、偏离 176%"。
+        //   排序与 /analytics/diagnose 的 topEvents 一致：偏离度 × (1+ln(持续小时+1))
+        try {
+            List<Map<String, Object>> evs = jdbcTemplate.queryForList("""
+                    SELECT DATE_FORMAT(start_ts, '%Y-%m-%d %H:%i') AS st,
+                           DATE_FORMAT(end_ts,   '%Y-%m-%d %H:%i') AS et,
+                           duration_hours AS dh, peak_value AS pv,
+                           baseline_value AS bv, deviation_pct AS dp, severity AS sv
+                      FROM fact_anomaly_event
+                     WHERE building_id = ? AND start_ts >= ? AND start_ts < ?
+                     ORDER BY COALESCE(deviation_pct, 0) * (1 + LN(duration_hours + 1)) DESC
+                     LIMIT 3
+                    """, buildingId,
+                    LocalDate.parse(startDate).atStartOfDay(),
+                    LocalDate.parse(endDate).plusDays(1).atStartOfDay());
+            if (!evs.isEmpty()) {
+                List<String> evLines = new ArrayList<>();
+                int i = 1;
+                for (Map<String, Object> ev : evs) {
+                    evLines.add(i++ + ". " + ev.get("st") + " ~ " + ev.get("et")
+                            + "，持续 " + ev.get("dh") + " 小时"
+                            + "，峰值 " + shortNum(toDouble(ev.get("pv")), "kWh")
+                            + "（历史基线 " + shortNum(toDouble(ev.get("bv")), "kWh") + "）"
+                            + "，偏离 " + ev.get("dp") + "%"
+                            + "，严重度 " + (ev.get("sv") == null ? "未分级" : ev.get("sv")));
+                }
+                m.put("重点异常事件", evLines);
+            }
+        } catch (Exception e) {
+            log.debug("诊断事件级取数失败：{}", e.toString());
+        }
+
         return m;
     }
 
@@ -528,6 +574,13 @@ public class DashboardInsightService {
         }
         if (m.get("异常时间范围") != null) {
             sb.append("异常发生时间：").append(m.get("异常时间范围")).append("\n");
+        }
+        // 事件级证据：让模型能指名具体异常事件
+        if (m.get("重点异常事件") instanceof List<?> evs && !evs.isEmpty()) {
+            sb.append("重点异常事件（按偏离度与持续时长综合排序，最多3条）：\n");
+            for (Object line : evs) {
+                sb.append("  ").append(line).append("\n");
+            }
         }
         if (m.get("类型结构") != null && !str(m.get("类型结构")).isBlank()) {
             sb.append("类型结构：").append(m.get("类型结构")).append("\n");

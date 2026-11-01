@@ -31,6 +31,7 @@ import java.util.*;
 public class AnalyticsService {
 
     private final AnalyticsMapper mapper;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
 
     /** 允许的时段类型 -> 分组 SQL 表达式（白名单，杜绝 SQL 注入） */
     private static final Map<String, String> PERIOD_EXPR = Map.of(
@@ -353,6 +354,24 @@ public class AnalyticsService {
         out.put("buildingIds", buildingIds);
         out.put("timeRange", startDate + " ~ " + endDate);
 
+        // ★ 数据边界：把「建筑不存在 / 无数据 / 未检测 / B级分摊 / 历史数据」
+        //   显式返回，而不是一律说「无异常」——否则用户会把
+        //   「没检测」误读成「没问题」。
+        String single = (buildingIds != null && buildingIds.size() == 1) ? buildingIds.get(0) : null;
+        if (single != null) {
+            Map<String, Object> boundary = checkBoundary(single, startDate, endDate);
+            out.putAll(boundary);
+            if (!"OK".equals(boundary.get("dataStatus"))) {
+                out.put("anomalyProfiles", List.of());
+                out.put("hasAnomaly", false);
+                out.put("anomalyTypeCount", 0);
+                out.put("anomalyVsNormal", List.of());
+                out.put("attributions", List.of());
+                out.put("topEvents", List.of());
+                return out;
+            }
+        }
+
         // 异常画像：按 建筑 × 异常类型 分组的多行结果
         List<Map<String, Object>> profiles = mapper.selectDiagnoseProfiles(buildingIds, startDate, endDate);
         out.put("anomalyProfiles", profiles);
@@ -366,6 +385,12 @@ public class AnalyticsService {
         // 自动归因：基于对比数据推导可能原因
         out.put("attributions", buildAttributions(cmp));
 
+        // ★ 事件级证据：最值得关注的 TOP3 异常事件。
+        //   聚合数据只能说明「哪类异常多」，事件明细才能让模型指名具体时间段。
+        List<Map<String, Object>> topEvents =
+                mapper.selectTopAnomalyEvents(buildingIds, startDate, endDate, 3);
+        out.put("topEvents", topEvents);
+
         // 能效画像
         if (buildingIds != null && !buildingIds.isEmpty()) {
             Map<String, Object> profile = mapper.selectEfficiencyProfile(buildingIds, startDate, endDate);
@@ -373,6 +398,68 @@ public class AnalyticsService {
         }
         return out;
     }
+
+    /**
+     * 数据边界检查：区分「建筑不存在 / B级分摊 / 无数据 / 未检测」，并标注历史数据。
+     *
+     * @return dataStatus = OK / GRADE_B / NO_DATA / NOT_EVALUATED
+     */
+    private Map<String, Object> checkBoundary(String buildingId, LocalDate startDate, LocalDate endDate) {
+        Map<String, Object> out = new LinkedHashMap<>();
+
+        Integer exists = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM dim_building WHERE building_id = ?", Integer.class, buildingId);
+        if (exists == null || exists == 0) {
+            throw new BizException(ResultCode.BUILDING_NOT_FOUND, "建筑不存在: " + buildingId);
+        }
+
+        String grade = jdbcTemplate.queryForObject(
+                "SELECT COALESCE(data_grade,'A') FROM dim_building WHERE building_id = ?",
+                String.class, buildingId);
+        if ("B".equalsIgnoreCase(grade)) {
+            out.put("dataStatus", "GRADE_B");
+            out.put("dataMessage", "该建筑为站点分摊数据（data_grade=B），不参与异常判定，"
+                    + "请勿理解为「没有异常」");
+            return out;
+        }
+
+        Map<String, Object> stat = jdbcTemplate.queryForMap("""
+                SELECT COUNT(*) AS rows_, COALESCE(SUM(anomaly_flag >= 0), 0) AS evaluated,
+                       MAX(ts) AS maxTs
+                  FROM fact_energy_hourly
+                 WHERE building_id = ? AND stat_date BETWEEN ? AND ?
+                """, buildingId, startDate, endDate);
+        long rows = ((Number) stat.get("rows_")).longValue();
+        long evaluated = ((Number) stat.get("evaluated")).longValue();
+
+        if (rows == 0) {
+            out.put("dataStatus", "NO_DATA");
+            out.put("dataMessage", "该建筑在所选区间内没有能耗数据");
+            return out;
+        }
+        if (evaluated == 0) {
+            out.put("dataStatus", "NOT_EVALUATED");
+            out.put("dataMessage", "该区间数据尚未完成异常检测，无法给出诊断");
+            return out;
+        }
+
+        Object maxTs = stat.get("maxTs");
+        if (maxTs != null) {
+            java.time.LocalDateTime latest = (maxTs instanceof java.time.LocalDateTime l)
+                    ? l : ((java.sql.Timestamp) maxTs).toLocalDateTime();
+            out.put("dataLatestTs", latest.toString().replace('T', ' '));
+            boolean historical = latest.isBefore(java.time.LocalDateTime.now().minusDays(1));
+            out.put("historical", historical);
+            if (historical) {
+                out.put("dataMessage", "所选区间为历史数据（最新到 " + latest.toLocalDate()
+                        + "），不是实时监测结果");
+            }
+        }
+
+        out.put("dataStatus", "OK");
+        return out;
+    }
+
 
     /**
      * 基于「异常时段 vs 正常时段」的客观对比自动生成归因假设。

@@ -34,6 +34,7 @@ import java.util.Map;
 public class AnomalyHandleController {
 
     private final AnomalyHandleService handleService;
+    private final com.carbon.platform.analytics.diagnosis.AnomalyVerificationService verifyService;
 
     @Operation(summary = "异常详情（含处理信息与历史）")
     @GetMapping("/{id}")
@@ -74,4 +75,20 @@ public class AnomalyHandleController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
         return R.ok(handleService.stats(buildingId, startDate, endDate));
     }
+
+    @Operation(summary = "处置后复检：对比处理前后同口径窗口")
+    @PostMapping("/{id}/verify")
+    @PreAuthorize("hasAnyRole('admin','operator')")
+    @OperLog(title = "异常复检", businessType = OperLog.BusinessType.UPDATE)
+    public R<Map<String, Object>> verify(@PathVariable long id) {
+        return R.ok(verifyService.verify(id, SecurityUtils.currentUsername()));
+    }
+
+    @Operation(summary = "复检历史")
+    @GetMapping("/{id}/verifications")
+    public R<List<Map<String, Object>>> verifications(@PathVariable long id,
+                                                      @RequestParam(defaultValue = "10") int limit) {
+        return R.ok(verifyService.history(id, null, limit));
+    }
+
 }

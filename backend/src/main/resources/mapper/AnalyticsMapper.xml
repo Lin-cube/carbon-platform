@@ -368,6 +368,32 @@
     </select>
 
     <!-- 异常时段 vs 正常时段对比：归因核心证据 -->
+    <!-- 诊断用：最值得关注的 TOP 异常事件。
+         排序 = 偏离百分比 × (1 + ln(持续小时+1))，兼顾「有多异常」和「持续多久」，
+         避免只按峰值排、把一次瞬时尖峰排到最前。 -->
+    <select id="selectTopAnomalyEvents" resultType="java.util.Map">
+        SELECT e.id AS anomalyId,
+               e.building_id AS buildingId,
+               DATE_FORMAT(e.start_ts, '%Y-%m-%d %H:%i') AS startTs,
+               DATE_FORMAT(e.end_ts,   '%Y-%m-%d %H:%i') AS endTs,
+               e.duration_hours AS durationHours,
+               e.anomaly_type AS anomalyType,
+               e.severity,
+               e.peak_value AS peakValue,
+               e.baseline_value AS baselineValue,
+               e.deviation_pct AS deviationPct,
+               ROUND(COALESCE(e.deviation_pct, 0) * (1 + LN(e.duration_hours + 1)), 2) AS score
+          FROM fact_anomaly_event e
+         WHERE e.start_ts &gt;= #{startDate}
+           AND e.start_ts &lt; DATE_ADD(#{endDate}, INTERVAL 1 DAY)
+           <if test="buildingIds != null and buildingIds.size() > 0">
+               AND e.building_id IN
+               <foreach collection="buildingIds" item="b" open="(" separator="," close=")">#{b}</foreach>
+           </if>
+         ORDER BY score DESC
+         LIMIT #{limit}
+    </select>
+
     <select id="selectAnomalyVsNormal" resultType="java.util.Map">
         SELECT
             '异常时段' AS `group`,

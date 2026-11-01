@@ -78,7 +78,7 @@
         <div class="kpi-sub">因子 0.5810 kgCO₂/kWh</div>
       </div>
 
-      <div class="kpi-card">
+        <div class="kpi-card kpi-clickable" @click="gotoAnomaly" title="点击查看异常清单">
         <div class="kpi-label">能耗异常率</div>
         <div class="kpi-value">
           {{ anomalyRatePct }}<span class="kpi-unit">%</span>
@@ -236,6 +236,12 @@ const hasSeries = computed(() => (series.value?.points?.length ?? 0) > 0)
  * 后端 overview.anomalyRate 是「比率」（0.0448 = 4.48%），
  * 直接拼 "%" 会显示成 0.0448%，这里 ×100 转成百分比。
  */
+/** 点异常率 KPI → 带当前区间跳到异常页 */
+function gotoAnomaly() {
+  router.push({ path: '/anomaly', query: { startDate: range.value?.[0], endDate: range.value?.[1] } })
+}
+
+
 const anomalyRatePct = computed(() => {
   const r = overview.value?.anomalyRate
   return r != null ? (r * 100).toFixed(2) : '--'
@@ -625,4 +631,9 @@ onMounted(async () => {
 }
 
 .text-danger { color: #C26B62; font-weight: 600; }
+
+/* 可点击的 KPI：点异常率进入异常清单 */
+.kpi-clickable { cursor: pointer; transition: box-shadow .18s ease, transform .18s ease; }
+.kpi-clickable:hover { box-shadow: 0 6px 18px -10px rgba(37, 61, 53, .45); transform: translateY(-1px); }
+.kpi-clickable::after { content: '›'; position: absolute; right: 12px; top: 10px; color: #9aa8a0; font-size: 18px; }
 </style>

@@ -1,0 +1,53 @@
+-- AI 诊断记录持久化
+CREATE TABLE IF NOT EXISTS anomaly_diagnosis (
+  id               BIGINT       NOT NULL AUTO_INCREMENT,
+  building_id      VARCHAR(96)  NOT NULL,
+  anomaly_id       BIGINT       NULL COMMENT '关联 fact_anomaly_event.id，可为空（区间诊断）',
+  start_date       DATE         NOT NULL,
+  end_date         DATE         NOT NULL,
+  data_fingerprint VARCHAR(64)  NOT NULL COMMENT '数据指纹：数据变了则缓存失效',
+  summary          TEXT         NULL COMMENT '诊断摘要',
+  evidence_json    JSON         NULL COMMENT '证据（异常vs正常对比、TOP事件）',
+  causes_json      JSON         NULL COMMENT '可能原因（含置信度/需核查标记）',
+  actions_json     JSON         NULL COMMENT '排查与运维建议',
+  top_events_json  JSON         NULL COMMENT 'TOP3 异常事件',
+  model            VARCHAR(64)  NULL,
+  mode             VARCHAR(16)  NULL COMMENT 'llm / rule',
+  status           VARCHAR(16)  NOT NULL DEFAULT 'VALID' COMMENT 'VALID / INVALID',
+  invalid_reason   VARCHAR(128) NULL,
+  created_by       VARCHAR(64)  NULL,
+  created_at       DATETIME     NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_bld (building_id, created_at),
+  KEY idx_fp (building_id, start_date, end_date, data_fingerprint),
+  KEY idx_anomaly (anomaly_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='AI 诊断记录（可追溯、可失效）';
+
+-- 处置后复检
+CREATE TABLE IF NOT EXISTS anomaly_verification (
+  id                BIGINT      NOT NULL AUTO_INCREMENT,
+  anomaly_id        BIGINT      NULL,
+  building_id       VARCHAR(96) NOT NULL,
+  diagnosis_id      BIGINT      NULL,
+  handle_at         DATETIME    NULL COMMENT '人工处置时间',
+  pre_start         DATE        NULL,
+  pre_end           DATE        NULL,
+  post_start        DATE        NULL,
+  post_end          DATE        NULL,
+  pre_hours         INT         NULL,
+  pre_avg_kwh       DECIMAL(16,3) NULL,
+  pre_baseline      DECIMAL(16,3) NULL,
+  pre_deviation_pct DECIMAL(10,2) NULL,
+  post_hours        INT         NULL,
+  post_avg_kwh      DECIMAL(16,3) NULL,
+  post_baseline     DECIMAL(16,3) NULL,
+  post_deviation_pct DECIMAL(10,2) NULL,
+  change_pct        DECIMAL(10,2) NULL,
+  conclusion        VARCHAR(32) NULL COMMENT 'IMPROVED / STILL_ANOMALY / INSUFFICIENT',
+  basis_json        JSON        NULL COMMENT '复检依据（窗口选择、可比性说明、限制）',
+  created_by        VARCHAR(64) NULL,
+  created_at        DATETIME    NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_anomaly (anomaly_id, created_at),
+  KEY idx_bld (building_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='异常处置后复检记录';
