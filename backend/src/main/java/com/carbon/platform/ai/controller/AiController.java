@@ -31,6 +31,8 @@ import java.util.Map;
 public class AiController {
 
     private final AiServiceClient aiServiceClient;
+    /** 截图提问：保存截图 + 基于该时段真实数据解释 */
+    private final com.carbon.platform.ai.service.ImageContextChatService imageContextChatService;
     private final com.carbon.platform.ai.service.DashboardInsightService dashboardInsightService;
     private final YuanbaoSearchService yuanbaoSearchService;
 
@@ -114,6 +116,25 @@ public class AiController {
      *   <li>{@code error} —— {message}</li>
      * </ul>
      */
+    @Operation(summary = "截图提问：上传看板截图，基于该时段真实数据解释「发生了什么」")
+    @PostMapping(value = "/chat/with-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @OperLog(title = "AI-截图提问", businessType = OperLog.BusinessType.QUERY)
+    public R<java.util.Map<String, Object>> chatWithImage(
+            @RequestPart("image") org.springframework.web.multipart.MultipartFile image,
+            @RequestParam(required = false) String question,
+            @RequestParam(required = false) String sessionId,
+            @RequestParam(required = false) String buildingId,
+            @RequestParam @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE)
+            java.time.LocalDate startDate,
+            @RequestParam @org.springframework.format.annotation.DateTimeFormat(
+                    iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE)
+            java.time.LocalDate endDate,
+            @RequestParam(required = false) String page) {
+        return R.ok(imageContextChatService.analyze(
+                image, question, sessionId, buildingId, startDate, endDate, page));
+    }
+
     @Operation(summary = "流式自然语言问答（SSE）")
     @PostMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     @OperLog(title = "AI-问答(流式)", businessType = OperLog.BusinessType.QUERY)

@@ -1,5 +1,6 @@
 package com.carbon.platform.energy.imports.dto;
 
+import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
 import java.util.List;
@@ -14,6 +15,12 @@ public class UploadResultVO {
     private String fileId;
     private String fileName;
     private String fileType;
+
+    @Schema(description = "自动识别的数据源类型：ENERGY_HOURLY / BUILDING_META / UNKNOWN")
+    private String detectedType;
+
+    @Schema(description = "类型中文说明")
+    private String detectedTypeLabel;
     private Long fileSize;
 
     private List<ColumnInfo> columns;

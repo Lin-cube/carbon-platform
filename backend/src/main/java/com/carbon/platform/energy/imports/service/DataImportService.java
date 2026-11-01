@@ -279,7 +279,43 @@ public class DataImportService {
             preview.add(fixed);
         }
         vo.setPreviewRows(preview);
+
+        // 自动识别数据源类型（只看表头语义）
+        String type = DataSourceClassifier.classify(headers);
+        vo.setDetectedType(type);
+        vo.setDetectedTypeLabel(DataSourceClassifier.label(type));
         return vo;
+    }
+
+    /**
+     * 批量上传：一次接收多个文件，逐个识别列、自动映射并判定数据源类型。
+     *
+     * <p>单个文件失败不影响其它文件——失败的那条会带着错误说明返回，
+     * 前端在列表里标红即可，不会让整批上传中断。
+     */
+    public List<UploadResultVO> uploadBatch(org.springframework.web.multipart.MultipartFile[] files) {
+        List<UploadResultVO> out = new ArrayList<>();
+        if (files == null || files.length == 0) {
+            throw new BizException(ResultCode.BAD_REQUEST, "请至少选择一个文件");
+        }
+        if (files.length > 20) {
+            throw new BizException(ResultCode.BAD_REQUEST, "单次最多上传 20 个文件");
+        }
+        for (org.springframework.web.multipart.MultipartFile f : files) {
+            try {
+                out.add(upload(f));
+            } catch (Exception e) {
+                log.warn("批量上传中文件失败：{} - {}", f.getOriginalFilename(), e.getMessage());
+                UploadResultVO err = new UploadResultVO();
+                err.setFileName(f.getOriginalFilename());
+                err.setFileSize(f.getSize());
+                err.setDetectedType(DataSourceClassifier.UNKNOWN);
+                err.setDetectedTypeLabel("上传失败");
+                err.setWarnings(List.of(String.valueOf(e.getMessage())));
+                out.add(err);
+            }
+        }
+        return out;
     }
 
     // ================================================================

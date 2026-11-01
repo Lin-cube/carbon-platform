@@ -6,6 +6,7 @@
         <!-- 审计记录入口：原来只能走完向导第 5 步才能看到历史批次，
              不导入就没法查看。这里提供常驻入口，随时可进。 -->
         <el-button v-if="step !== 4" text type="primary" @click="openAudit">
+          <el-button text type="primary" @click="openBatch">批量导入（多文件）</el-button>
           查看历史导入批次 →
         </el-button>
         <el-button v-else text type="primary" @click="step = 0">← 返回导入向导</el-button>
@@ -366,6 +367,78 @@
       </el-descriptions>
     </el-dialog>
   </div>
+
+    <!-- 批量导入：多文件自动分类 + 自动字段映射 -->
+    <el-dialog v-model="batchVisible" title="批量导入（多文件）" width="860px" append-to-body>
+      <el-alert type="info" :closable="false" show-icon class="mb-12"
+                title="一次可选多个文件，系统按表头自动识别数据源类型并生成字段映射；识别不出类型的文件会标红，需人工处理。" />
+
+      <el-upload ref="batchUploadRef" drag multiple :auto-upload="false" :limit="20"
+                 accept=".csv,.xlsx,.xls" :on-change="onBatchChange" :file-list="batchFileList"
+                 class="uploader">
+        <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+        <div class="el-upload__text">将多个文件拖到此处，或<em>点击选择</em></div>
+        <template #tip>
+          <div class="el-upload__tip">支持 CSV / XLSX，单次最多 20 个文件</div>
+        </template>
+      </el-upload>
+
+      <div v-if="batchUploads.length" class="mt-12">
+        <div class="chart-title">识别结果</div>
+        <el-table :data="batchUploads" size="small" max-height="300">
+          <el-table-column prop="fileName" label="文件" min-width="200" show-overflow-tooltip />
+          <el-table-column label="识别类型" width="170">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain"
+                      :type="row.detectedType === 'ENERGY_HOURLY' ? 'success'
+                             : row.detectedType === 'BUILDING_META' ? 'warning' : 'danger'">
+                {{ row.detectedType === 'BUILDING_META' ? '建筑台账（需人工）'
+                   : (row.detectedTypeLabel || row.detectedType || '未识别') }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="自动映射" width="110" align="right">
+            <template #default="{ row }">
+              {{ mappedCount(row) }} / {{ (row.columns || []).length }}
+            </template>
+          </el-table-column>
+          <el-table-column label="行数" width="90" align="right">
+            <template #default="{ row }">{{ row.totalRows ?? '--' }}</template>
+          </el-table-column>
+          <el-table-column label="告警" min-width="200" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span class="text-dim" style="font-size: 12px">
+                {{ (row.warnings || []).slice(0, 2).join('；') || '—' }}
+              </span>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <el-table v-if="batchResults.length" :data="batchResults" size="small" class="mt-12" max-height="240">
+          <el-table-column prop="fileName" label="文件" min-width="180" show-overflow-tooltip />
+          <el-table-column label="结果" width="90">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.ok ? 'success' : 'danger'">{{ row.ok ? '成功' : '失败' }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="successRows" label="写入" width="90" align="right" />
+          <el-table-column prop="skippedRows" label="跳过" width="90" align="right" />
+          <el-table-column prop="status" label="状态" width="150" />
+          <el-table-column prop="error" label="错误" min-width="160" show-overflow-tooltip />
+        </el-table>
+      </div>
+
+      <template #footer>
+        <el-button @click="batchVisible = false">关闭</el-button>
+        <el-button :disabled="!batchRawFiles.length" :loading="batchUploading" @click="doBatchUpload">
+          上传并识别（{{ batchRawFiles.length }}）
+        </el-button>
+        <el-button type="primary" :disabled="!batchUploads.length" :loading="batchImporting"
+                   @click="doBatchImport">
+          开始批量导入
+        </el-button>
+      </template>
+    </el-dialog>
 </template>
 
 <script setup lang="ts">
@@ -390,6 +463,8 @@ interface ColumnInfo {
   reason: string
 }
 interface UploadResult {
+  detectedType?: string
+  detectedTypeLabel?: string
   fileId: string
   fileName: string
   fileType: string
@@ -435,6 +510,99 @@ interface ImportLog {
 const step = ref(0)
 const loading = ref(false)
 const uploadRef = ref<UploadInstance>()
+
+// ── 批量导入 ──
+const batchVisible = ref(false)
+const batchUploadRef = ref()
+const batchRawFiles = ref<File[]>([])
+const batchFileList = ref<any[]>([])
+const batchUploads = ref<UploadResult[]>([])
+const batchResults = ref<any[]>([])
+const batchUploading = ref(false)
+const batchImporting = ref(false)
+
+function mappedCount(row: UploadResult): number {
+  return (row.columns || []).filter((c) => !!c.suggestedTarget).length
+}
+
+function openBatch() {
+  batchVisible.value = true
+  batchRawFiles.value = []
+  batchFileList.value = []
+  batchUploads.value = []
+  batchResults.value = []
+}
+
+function onBatchChange(_file: any, fileList: any[]) {
+  batchFileList.value = fileList
+  batchRawFiles.value = fileList.map((f) => f.raw).filter(Boolean)
+}
+
+async function doBatchUpload() {
+  if (!batchRawFiles.value.length) return
+  batchUploading.value = true
+  try {
+    const fd = new FormData()
+    for (const f of batchRawFiles.value) fd.append('files', f)
+    const res = await request<UploadResult[]>({
+      url: '/import/upload-batch',
+      method: 'post',
+      data: fd,
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+    batchUploads.value = res
+    batchResults.value = []
+    const okCount = res.filter((r) => r.detectedType && r.detectedType !== 'UNKNOWN').length
+    ElMessage.success(`识别完成：${res.length} 个文件，${okCount} 个可自动处理`)
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    batchUploading.value = false
+  }
+}
+
+async function doBatchImport() {
+  // 只有「能耗时序」文件能走批量落库；建筑台账没有时间维度，
+  // 提交上去必然因「缺少必填字段映射：监测时间」失败，这里直接排除并提示。
+  const usable = batchUploads.value.filter((r) => r.fileId && r.detectedType === 'ENERGY_HOURLY')
+  const metaOnly = batchUploads.value.filter((r) => r.detectedType === 'BUILDING_META').length
+  if (!usable.length) {
+    ElMessage.warning(metaOnly > 0
+      ? `只有 ${metaOnly} 个建筑台账文件，台账需用单文件向导人工确认后导入`
+      : '没有可批量导入的能耗数据文件')
+    return
+  }
+  batchImporting.value = true
+  try {
+    const requests = usable.map((r) => ({
+      fileId: r.fileId,
+      mappings: (r.columns || [])
+        .filter((c) => c.suggestedTarget)
+        .map((c) => ({ sourceColumn: c.sourceColumn, targetField: c.suggestedTarget })),
+      cleanRules: {
+        trimString: true,
+        missingStrategy: 'drop',
+        dropNegative: true,
+        dedupStrategy: 'byBuildingTime',
+        electricityUnit: 'kwh',
+        unitConsistencyCheck: true
+      },
+      dryRun: false
+    }))
+    const res = await request<{ total: number; okCount: number; failCount: number; successRows: number; results: any[] }>({
+      url: '/import/execute-batch',
+      method: 'post',
+      data: requests
+    })
+    batchResults.value = res.results || []
+    ElMessage.success(`批量导入完成：成功 ${res.okCount} 个、失败 ${res.failCount} 个，共写入 ${res.successRows} 行`)
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    batchImporting.value = false
+  }
+}
+
 const uploadResult = ref<UploadResult | null>(null)
 const targetFields = ref<TargetField[]>([])
 const mapping = reactive<Record<string, string>>({})

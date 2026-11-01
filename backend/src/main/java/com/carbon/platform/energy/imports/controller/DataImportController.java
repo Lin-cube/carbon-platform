@@ -41,6 +41,56 @@ public class DataImportController {
     private final com.carbon.platform.energy.imports.service.AnomalyDetectionService anomalyDetectionService;
     private final com.carbon.platform.energy.imports.service.ImportAuditExportService auditExportService;
 
+    @Operation(summary = "批量上传：多文件自动分类 + 自动字段映射")
+    @PostMapping("/upload-batch")
+    @OperLog(title = "数据导入-批量上传", businessType = OperLog.BusinessType.INSERT)
+    public R<java.util.List<com.carbon.platform.energy.imports.dto.UploadResultVO>> uploadBatch(
+            @RequestParam("files") org.springframework.web.multipart.MultipartFile[] files) {
+        return R.ok(importService.uploadBatch(files));
+    }
+
+    @Operation(summary = "批量执行导入：逐个文件落库，单文件失败不影响其它文件")
+    @PostMapping("/execute-batch")
+    @OperLog(title = "数据导入-批量执行", businessType = OperLog.BusinessType.INSERT)
+    public R<Map<String, Object>> executeBatch(@RequestBody java.util.List<ImportRequest> requests) {
+        if (requests == null || requests.isEmpty()) {
+            throw new BizException(ResultCode.BAD_REQUEST, "没有待导入的文件");
+        }
+        java.util.List<Map<String, Object>> results = new java.util.ArrayList<>();
+        int okCount = 0;
+        int failCount = 0;
+        long successRows = 0;
+        for (ImportRequest req : requests) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("fileId", req.getFileId());
+            try {
+                var r = importService.execute(req);
+                item.put("ok", true);
+                item.put("batchNo", r.getBatchNo());
+                item.put("fileName", r.getFileName());
+                item.put("successRows", r.getSuccessRows());
+                item.put("skippedRows", r.getSkippedRows());
+                item.put("failedRows", r.getFailedRows());
+                item.put("status", r.getStatus());
+                item.put("derivedStatus", r.getDerivedStatus());
+                okCount++;
+                successRows += r.getSuccessRows() == null ? 0 : r.getSuccessRows();
+            } catch (Exception e) {
+                item.put("ok", false);
+                item.put("error", String.valueOf(e.getMessage()));
+                failCount++;
+            }
+            results.add(item);
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("total", requests.size());
+        out.put("okCount", okCount);
+        out.put("failCount", failCount);
+        out.put("successRows", successRows);
+        out.put("results", results);
+        return R.ok(out);
+    }
+
     @Operation(summary = "步骤① 上传数据源并识别列（返回自动字段映射建议）")
     @PostMapping("/upload")
     @OperLog(title = "数据导入-上传", businessType = OperLog.BusinessType.IMPORT, saveParam = false)

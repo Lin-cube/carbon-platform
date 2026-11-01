@@ -83,3 +83,6 @@ Thumbs.db
 *.iws
 *.swp
 *~
+
+# AI 截图上传目录（运行时生成）
+.ai-uploads/

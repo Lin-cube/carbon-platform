@@ -160,13 +160,28 @@
 
       <!-- 输入框：浅色玻璃卡片，固定于对话区底部 -->
       <div class="input-bar">
-        <el-input v-model="question" type="textarea" :rows="2" resize="none"
-                  placeholder="用中文提问，例如：2016年有哪些能耗异常？（Enter 发送，Shift+Enter 换行）"
-                  @keydown.enter.exact.prevent="send" />
-        <el-button type="primary" :icon="Promotion" :loading="sending" :disabled="!canSend"
-                   class="send-btn" @click="send">
-          发送
-        </el-button>
+        <div v-if="imagePreview" class="image-chip">
+          <img :src="imagePreview" alt="截图预览" />
+          <div class="image-chip-meta">
+            <span>截图已附加</span>
+            <span class="text-dim">发送后将基于该时段真实数据分析</span>
+          </div>
+          <el-button link type="danger" size="small" @click="clearImage">移除</el-button>
+        </div>
+        <div class="input-row">
+          <el-button :icon="Picture" circle size="small" class="image-btn"
+                     title="上传截图提问（当前模型不支持识图，将基于该时段数据回答）"
+                     @click="pickImage" />
+          <el-input v-model="question" type="textarea" :rows="2" resize="none"
+                    placeholder="用中文提问，例如：2016年有哪些能耗异常？也可点左侧图标上传截图让 AI 解释"
+                    @keydown.enter.exact.prevent="send" />
+          <el-button type="primary" :icon="Promotion" :loading="sending" :disabled="!canSend"
+                     class="send-btn" @click="send">
+            发送
+          </el-button>
+        </div>
+        <input ref="imageInput" type="file" accept="image/png,image/jpeg,image/webp"
+               style="display: none" @change="onImageChange" />
       </div>
     </div>
   </div>
@@ -175,7 +190,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Delete, Promotion, DocumentCopy } from '@element-plus/icons-vue'
+import { Delete, Promotion, DocumentCopy, Picture } from '@element-plus/icons-vue'
 import { aiApi, energyApi } from '@/api'
 import { getToken } from '@/api/request'
 import { renderMarkdown } from '@/utils/markdown'
@@ -194,6 +209,34 @@ interface ChatItem {
 const messages = ref<ChatItem[]>([])
 const question = ref('')
 const sending = ref(false)
+// 截图提问
+const imageInput = ref<HTMLInputElement>()
+const imageFile = ref<File | null>(null)
+const imagePreview = ref('')
+
+function pickImage() {
+  imageInput.value?.click()
+}
+
+function onImageChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  const f = input.files?.[0]
+  if (!f) return
+  if (f.size > 5 * 1024 * 1024) {
+    ElMessage.error('截图不能超过 5MB')
+    input.value = ''
+    return
+  }
+  imageFile.value = f
+  imagePreview.value = URL.createObjectURL(f)
+  input.value = ''
+}
+
+function clearImage() {
+  if (imagePreview.value) URL.revokeObjectURL(imagePreview.value)
+  imageFile.value = null
+  imagePreview.value = ''
+}
 const listEl = ref<HTMLDivElement>()
 const buildings = ref<BuildingRow[]>([])
 /** 上一次提问（用于失败重试） */
@@ -309,6 +352,56 @@ async function loadStatus() {
   }
 }
 
+/**
+ * 截图提问。
+ *
+ * 当前模型（deepseek-chat）不支持识图，后端会保存截图并取该时段的真实数据
+ * 做分析；返回的 notice 会明确告知用户「不是看图得出的结论」。
+ */
+async function sendWithImage(q: string) {
+  const file = imageFile.value
+  if (!file) return
+  push({ role: 'user', text: (q || '这段时间发生了什么？有什么建议？') + '\n（附截图）' })
+  lastQuestion.value = q
+  question.value = ''
+  sending.value = true
+
+  const item = reactive<ChatItem>({ role: 'assistant', text: '正在结合该时段数据分析…' })
+  messages.value.push(item)
+  scrollToBottom()
+
+  try {
+    const fd = new FormData()
+    fd.append('image', file)
+    fd.append('question', q || '这段时间发生了什么？可能是什么原因？有什么建议？')
+    fd.append('sessionId', sessionId.value)
+    if (ctxBuildingId.value) fd.append('buildingId', ctxBuildingId.value)
+    fd.append('startDate', ctxRange.value?.[0] || app.startDate)
+    fd.append('endDate', ctxRange.value?.[1] || app.endDate)
+    fd.append('page', 'assistant')
+
+    const token = getToken()
+    const resp = await fetch('/api/ai/chat/with-image', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: fd
+    })
+    const json = await resp.json()
+    if (!resp.ok || json.code !== 200) {
+      throw new Error(json.message || `HTTP ${resp.status}`)
+    }
+    const data = json.data || {}
+    item.text = (data.answer || '（无回答）') + '\n\n—— ' + (data.notice || '')
+  } catch (e: any) {
+    item.text = e?.message || '截图分析失败，请重试'
+    item.error = 'failed'
+  } finally {
+    sending.value = false
+    clearImage()
+    scrollToBottom()
+  }
+}
+
 /** 解析单个 SSE 事件块 */
 function parseSse(block: string): { event: string; data: any } | null {
   let event = 'message'
@@ -334,7 +427,11 @@ function parseSse(block: string): { event: string; data: any } | null {
  */
 async function send() {
   const q = question.value.trim()
-  if (!q || sending.value) return
+  if ((!q && !imageFile.value) || sending.value) return
+  if (imageFile.value) {
+    await sendWithImage(q)
+    return
+  }
 
   push({ role: 'user', text: q })
   lastQuestion.value = q
@@ -720,8 +817,9 @@ onMounted(async () => {
 /* 输入框：浅色玻璃卡片 */
 .input-bar {
   display: flex;
-  gap: 10px;
-  align-items: flex-end;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
   margin-top: 12px;
   padding: 12px 14px;
   border-radius: 14px;
@@ -748,4 +846,33 @@ onMounted(async () => {
 @media (prefers-reduced-motion: reduce) {
   .cap-card, .copy-btn { transition: none; }
 }
+
+/* 截图上传 */
+.input-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+  width: 100%;
+}
+.input-row :deep(.el-textarea) { flex: 1 1 auto; min-width: 0; }
+.input-row :deep(.el-textarea__inner) { width: 100%; }
+.image-btn { flex: 0 0 auto; margin-bottom: 6px; }
+.image-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid #dfe9e3;
+  border-radius: 10px;
+  background: #f6faf8;
+}
+.image-chip img {
+  width: 54px;
+  height: 38px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #e3efe8;
+}
+.image-chip-meta { display: flex; flex-direction: column; font-size: 12px; line-height: 1.5; }
 </style>
