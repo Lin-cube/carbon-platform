@@ -195,3 +195,35 @@ probe 的 `baseline` 与删除前**完全相同**（误差 < 1e-6）→ 不存�
 
 其它入口：能耗查询页「查看异常诊断」、看板异常率 KPI、3D 园区建筑面板，
 均带 `buildingId + startDate + endDate` 统一参数。
+
+---
+
+## 八、线上部署记录（2026-11-01）
+
+**环境**：Ubuntu 22.04 · 2 核 4G · `/opt/carbon-platform` · systemd · Nginx
+**域名**：https://carbon-platfrom.top
+**方式**：增量更新既有部署（非全新安装）
+
+### 本次上线内容
+
+| 项 | 说明 |
+|---|---|
+| 后端 jar | 替换为含事件级诊断 / 诊断持久化 / 复检的新版本 |
+| 前端 dist | 替换为新构建（含异常抽屉诊断区、批量导入、多图问答） |
+| RAG 源码 | `app.py` / `retriever.py` 更新，服务已重启 |
+| 数据修正 | 2016 碳排 363,489,106.7 → **357,763,459.9**（与本地一致） |
+| 迁移 V2026_15 | 新建 `anomaly_diagnosis`、`anomaly_verification` |
+| 迁移 V2026_16 | 补 `fact_anomaly_event` 缺失的 7 个处置/复检字段 |
+
+### 上线时发现的线上/本地结构漂移
+
+`fact_anomaly_event` 线上只有 13 列，缺 `handle_status / handle_by / handle_at /
+handle_version / verify_status / verify_at / updated_at`。
+新 jar 启动后异常扫描接口直接 500：`Unknown column 'e.handle_status'`。
+**已由 V2026_16 补齐，接口恢复 200。**
+
+> 教训：本地开发期加的字段必须同步成迁移脚本，否则线上旧库会缺列。
+
+### 备份
+
+`/opt/carbon-platform/backup-20261101/`（旧 jar、旧 dist、旧 rag 源码、旧 www 静态文件）
