@@ -3,13 +3,17 @@
     <div class="page-card wizard-step mb-12">
       <div class="page-title-row">
         <div class="page-title">数据导入与治理 · 五步向导</div>
-        <!-- 审计记录入口：原来只能走完向导第 5 步才能看到历史批次，
-             不导入就没法查看。这里提供常驻入口，随时可进。 -->
-        <el-button v-if="step !== 4" text type="primary" @click="openAudit">
-          <el-button text type="primary" @click="openBatch">批量导入（多文件）</el-button>
-          查看历史导入批次 →
-        </el-button>
-        <el-button v-else text type="primary" @click="step = 0">← 返回导入向导</el-button>
+        <div class="head-actions">
+          <el-button size="small" :icon="UploadFilled" @click="openBatch">
+            批量导入（多文件）
+          </el-button>
+          <!-- 审计记录入口：原来只能走完向导第 5 步才能看到历史批次，
+               不导入就没法查看。这里提供常驻入口，随时可进。 -->
+          <el-button v-if="step !== 4" text type="primary" @click="openAudit">
+            查看历史导入批次 →
+          </el-button>
+          <el-button v-else text type="primary" @click="step = 0">← 返回导入向导</el-button>
+        </div>
       </div>
       <el-steps :active="step" finish-status="success" align-center>
         <el-step title="数据源选择" description="上传 CSV / Excel" />
@@ -1035,15 +1039,6 @@ onMounted(async () => {
   .rule-grid { grid-template-columns: 1fr; }
 }
 
-.page-title-row,
-.chart-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.uploader { max-width: 700px; }
 .step-actions {
   margin-top: 18px;
   display: flex;
@@ -1064,5 +1059,13 @@ onMounted(async () => {
   color: #9aa8a0;
   cursor: help;
   vertical-align: -2px;
+}
+
+/* 头部操作区：显式 flex + gap，不依赖 Element Plus 的相邻按钮 margin */
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
 }
 </style>
