@@ -18,33 +18,29 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 「截图提问」：用户上传一张看板/图表截图，希望有人解释这段时间发生了什么。
+ * 「截图提问」：用户上传一张看板/图表截图，让 AI 解释这段时间发生了什么。
  *
  * <h3>实现方式</h3>
- * 实测 api.deepseek.com 的 {@code deepseek-chat} <b>支持图片输入</b>
- * （纯红/纯蓝判别、看板截图数字识别均通过），因此本服务直接把截图以
- * {@code image_url} 交给多模态模型，同时附上该时段的真实数据快照：
- * 图片负责"用户看到的是什么"，数据负责"真实数值是多少"，二者不一致时以数据为准。
- * <ol>
- *   <li>校验并保存截图（归档，供人工核对）；</li>
- *   <li>取该时间范围（可选建筑）的<b>真实数据快照</b>——
- *       用电/空调/碳排、异常事件数与时长、异常最多的建筑、近期逐日趋势；</li>
- *   <li>把快照交给大模型，让它解释「这段时间发生了什么、可能原因、建议」。</li>
- * </ol>
+ * 实测 api.deepseek.com 的 {@code deepseek-chat} 支持图片输入，因此：
+ * <ul>
+ *   <li>截图直接以 {@code image_url} 交给多模态模型；</li>
+ *   <li>同时附上该时段的真实数据快照（含环比、日序列、异常 TOP 事件）；</li>
+ *   <li>要求模型<b>先复述截图里看到的数字</b>，再用数据交叉核对，最后解释与建议。</li>
+ * </ul>
  *
- * <p>这样回答的依据是可核对的真实数据，而不是对图片的猜测；
- * 返回体中 {@code imageAnalyzed=false} 与 {@code notice} 会明确说明这一点，
- * 不把「按数据处理」包装成「模型看图」。
- *
- * <p>若后续换成支持视觉的模型（如 Qwen-VL），只需在此处把图片以
- * image_url 形式加入消息体即可，其余链路不变。
+ * <h3>为什么快照要做厚</h3>
+ * 早期版本只给了 11 个总量指标，模型只能泛泛而谈（"用电较高、异常偏多"）。
+ * 现在补上：环比、逐日序列、峰谷日、最严重的 3 起异常明细，
+ * 模型才能说出"12/29 冲到 155.5 万 kWh"这种具体结论。
  */
 @Slf4j
 @Service
@@ -53,19 +49,19 @@ public class ImageContextChatService {
 
     private final LlmClient llmClient;
     private final JdbcTemplate jdbcTemplate;
+    /** 与文字问答共用会话历史，保证「先传图问、再用文字追问」能接上 */
+    private final DeepSeekToolCallingService toolCallingService;
 
     @Value("${carbon.ai.upload-dir:.ai-uploads}")
     private String uploadDir;
 
     private static final long MAX_BYTES = 5L * 1024 * 1024;
     private static final List<String> ALLOWED = List.of("jpg", "jpeg", "png", "webp");
+    private static final int MAX_HISTORY_TURNS = 4;
 
-    /**
-     * 处理「截图 + 问题」。
-     *
-     * @param buildingId 可空；为空表示全平台
-     * @param page       截图来源页面（dashboard/analytics/anomaly…），仅作提示
-     */
+    /** 会话历史（sessionId → 最近几轮问答），让截图提问也能追问 */
+    private final Map<String, List<String>> history = new ConcurrentHashMap<>();
+
     public Map<String, Object> analyze(MultipartFile image, String question, String sessionId,
                                        String buildingId, LocalDate startDate, LocalDate endDate,
                                        String page) {
@@ -79,11 +75,16 @@ public class ImageContextChatService {
         if (!ALLOWED.contains(ext)) {
             throw new BizException(ResultCode.BAD_REQUEST, "仅支持 jpg / png / webp 截图");
         }
-        // 真实解码校验：挡住改了后缀的非图片文件
+        // ★ 先把字节读进内存再复用。
+        //   踩过的坑：MultipartFile.transferTo() 会把临时文件移走，
+        //   之后再 getInputStream() 会失败（日志「图片转 base64 失败」），
+        //   导致多模态调用退化成纯文本、模型答"看不到截图"。
+        byte[] bytes;
         int width = 0;
         int height = 0;
-        try (InputStream in = image.getInputStream()) {
-            BufferedImage img = ImageIO.read(in);
+        try {
+            bytes = image.getBytes();
+            BufferedImage img = ImageIO.read(new java.io.ByteArrayInputStream(bytes));
             if (img == null) {
                 throw new BizException(ResultCode.BAD_REQUEST, "文件不是有效图片");
             }
@@ -95,11 +96,21 @@ public class ImageContextChatService {
             throw new BizException(ResultCode.BAD_REQUEST, "图片读取失败：" + e.getMessage());
         }
 
-        String imageId = save(image, ext);
-        String dataUrl = toDataUrl(image);
+        String imageId = save(bytes, ext);
+        String dataUrl = toDataUrl(bytes);
         Map<String, Object> snapshot = buildSnapshot(buildingId, startDate, endDate);
         boolean[] usedVision = {false};
-        String answer = explain(question, snapshot, page, width, height, dataUrl, usedVision);
+        String answer = explain(question, snapshot, page, width, height, dataUrl,
+                sessionId, usedVision);
+
+        remember(sessionId, question, answer);
+        // 同步一份到文字问答的会话历史，便于后续用文字追问
+        try {
+            toolCallingService.rememberExchange(sessionId,
+                    StringUtils.hasText(question) ? question : "（上传截图）", answer);
+        } catch (Exception e) {
+            log.warn("同步截图问答到会话历史失败：{}", e.getMessage());
+        }
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("imageId", imageId);
@@ -122,65 +133,107 @@ public class ImageContextChatService {
                 : new Object[]{startDate, endDate};
 
         Map<String, Object> s = new LinkedHashMap<>();
-        s.put("buildingId", byBuilding ? buildingId : "全部园区");
-        s.put("dateRange", startDate + " ~ " + endDate);
+        s.put("范围", byBuilding ? buildingId : "全部园区");
+        s.put("统计区间", startDate + " ~ " + endDate);
 
+        // ── 总量 ──
         try {
             Map<String, Object> row = jdbcTemplate.queryForMap(
-                    "SELECT COUNT(*) AS hours, "
+                    "SELECT COUNT(*) AS hours, COUNT(DISTINCT building_id) AS blds, "
                             + "COALESCE(SUM(electricity_kwh),0) AS kwh, "
                             + "COALESCE(SUM(hvac_kwh),0) AS hvac, "
                             + "COALESCE(SUM(carbon_kg),0) AS carbon "
                             + "FROM fact_energy_hourly WHERE stat_date BETWEEN ? AND ?" + where, args);
-            s.put("totalElectricityKwh", row.get("kwh"));
-            s.put("hvacKwh", row.get("hvac"));
-            s.put("carbonKg", row.get("carbon"));
-            s.put("hours", row.get("hours"));
+            s.put("总用电kWh", row.get("kwh"));
+            s.put("空调分项kWh", row.get("hvac"));
+            s.put("碳排放kg", row.get("carbon"));
+            s.put("参评建筑数", row.get("blds"));
         } catch (Exception e) {
-            s.put("energyError", e.getMessage());
+            s.put("电量查询失败", e.getMessage());
         }
 
+        // ── 环比 ──
         try {
-            Object[] a = byBuilding
+            long days = ChronoUnit.DAYS.between(startDate, endDate) + 1;
+            LocalDate prevStart = startDate.minusDays(days);
+            LocalDate prevEnd = startDate.minusDays(1);
+            Object[] a2 = byBuilding
+                    ? new Object[]{prevStart, prevEnd, buildingId}
+                    : new Object[]{prevStart, prevEnd};
+            Map<String, Object> prev = jdbcTemplate.queryForMap(
+                    "SELECT COALESCE(SUM(electricity_kwh),0) AS kwh "
+                            + "FROM fact_energy_hourly WHERE stat_date BETWEEN ? AND ?" + where, a2);
+            s.put("上期用电kWh", prev.get("kwh"));
+            s.put("环比区间说明", "上一区间 " + prevStart + " ~ " + prevEnd);
+        } catch (Exception e) {
+            s.put("环比查询失败", e.getMessage());
+        }
+
+        // ── 逐日序列 + 峰谷 ──
+        try {
+            List<Map<String, Object>> daily = jdbcTemplate.queryForList(
+                    "SELECT stat_date AS d, ROUND(SUM(electricity_kwh),1) AS kwh "
+                            + "FROM fact_energy_hourly WHERE stat_date BETWEEN ? AND ?" + where
+                            + " GROUP BY stat_date ORDER BY stat_date", args);
+            if (daily.size() > 31) {
+                daily = daily.subList(daily.size() - 31, daily.size());
+            }
+            s.put("逐日用电（最多31天）", daily);
+
+            Map<String, Object> peak = null;
+            Map<String, Object> trough = null;
+            double sum = 0;
+            for (Map<String, Object> d : daily) {
+                double v = ((Number) d.get("kwh")).doubleValue();
+                sum += v;
+                if (peak == null || v > ((Number) peak.get("kwh")).doubleValue()) {
+                    peak = d;
+                }
+                if (trough == null || v < ((Number) trough.get("kwh")).doubleValue()) {
+                    trough = d;
+                }
+            }
+            s.put("峰值日", peak);
+            s.put("谷值日", trough);
+            if (!daily.isEmpty()) {
+                s.put("日均kWh", Math.round(sum / daily.size() * 10) / 10.0);
+            }
+        } catch (Exception e) {
+            s.put("日序列查询失败", e.getMessage());
+        }
+
+        // ── 异常汇总 + TOP3 事件 ──
+        try {
+            Object[] a3 = byBuilding
                     ? new Object[]{startDate, endDate, buildingId}
                     : new Object[]{startDate, endDate};
             Map<String, Object> an = jdbcTemplate.queryForMap(
                     "SELECT COUNT(*) AS events, COALESCE(SUM(duration_hours),0) AS hours "
                             + "FROM fact_anomaly_event WHERE start_ts >= ? "
                             + "AND start_ts < DATE_ADD(?, INTERVAL 1 DAY)"
-                            + (byBuilding ? " AND building_id = ?" : ""), a);
-            s.put("anomalyEvents", an.get("events"));
-            s.put("anomalyHours", an.get("hours"));
-        } catch (Exception e) {
-            s.put("anomalyError", e.getMessage());
-        }
+                            + (byBuilding ? " AND building_id = ?" : ""), a3);
+            s.put("异常事件数", an.get("events"));
+            s.put("异常小时数", an.get("hours"));
 
-        try {
-            List<Map<String, Object>> top = jdbcTemplate.queryForList(
+            s.put("最严重的3起异常", jdbcTemplate.queryForList(
+                    "SELECT building_id AS 建筑, "
+                            + "DATE_FORMAT(start_ts,'%Y-%m-%d %H:%i') AS 开始时间, "
+                            + "duration_hours AS 持续小时, anomaly_type AS 类型, "
+                            + "severity AS 严重度, deviation_pct AS 偏离百分比 "
+                            + "FROM fact_anomaly_event WHERE start_ts >= ? "
+                            + "AND start_ts < DATE_ADD(?, INTERVAL 1 DAY)"
+                            + (byBuilding ? " AND building_id = ?" : "")
+                            + " ORDER BY duration_hours DESC LIMIT 3", a3));
+
+            s.put("异常时长TOP3建筑", jdbcTemplate.queryForList(
                     "SELECT building_id AS buildingId, COUNT(*) AS events, "
                             + "SUM(duration_hours) AS hours "
                             + "FROM fact_anomaly_event WHERE start_ts >= ? "
                             + "AND start_ts < DATE_ADD(?, INTERVAL 1 DAY) "
                             + (byBuilding ? "AND building_id = ? " : "")
-                            + "GROUP BY building_id ORDER BY hours DESC LIMIT 3",
-                    byBuilding ? new Object[]{startDate, endDate, buildingId}
-                            : new Object[]{startDate, endDate});
-            s.put("topAnomalyBuildings", top);
+                            + "GROUP BY building_id ORDER BY hours DESC LIMIT 3", a3));
         } catch (Exception e) {
-            s.put("topError", e.getMessage());
-        }
-
-        try {
-            List<Map<String, Object>> trend = jdbcTemplate.queryForList(
-                    "SELECT stat_date AS d, ROUND(SUM(electricity_kwh),1) AS kwh "
-                            + "FROM fact_energy_hourly WHERE stat_date BETWEEN ? AND ?" + where
-                            + " GROUP BY stat_date ORDER BY stat_date DESC LIMIT 7",
-                    args);
-            List<Map<String, Object>> ordered = new ArrayList<>(trend);
-            java.util.Collections.reverse(ordered);
-            s.put("recentDailyKwh", ordered);
-        } catch (Exception e) {
-            s.put("trendError", e.getMessage());
+            s.put("异常查询失败", e.getMessage());
         }
         return s;
     }
@@ -188,62 +241,76 @@ public class ImageContextChatService {
     // ================================================================ 解释
 
     private String explain(String question, Map<String, Object> snapshot, String page,
-                           int width, int height, String dataUrl, boolean[] usedVision) {
-        String q = StringUtils.hasText(question) ? question : "这段时间发生了什么？可能是什么原因？有什么建议？";
+                           int width, int height, String dataUrl,
+                           String sessionId, boolean[] usedVision) {
+        String q = StringUtils.hasText(question) ? question : "这张图反映的情况怎么样？可能是什么原因？该怎么处理？";
         StringBuilder user = new StringBuilder();
-        user.append("用户上传了一张截图（来源页面：").append(StringUtils.hasText(page) ? page : "未知")
-                .append("，尺寸 ").append(width).append("×").append(height).append("）。\n");
-        user.append("请先看截图内容，再结合下面这份真实数据回答；")
-                .append("若截图与数据不一致，以数据为准并指出差异。\n\n");
+
+        List<String> hist = history.getOrDefault(sessionId, List.of());
+        if (!hist.isEmpty()) {
+            user.append("【之前的对话】\n");
+            synchronized (hist) {
+                for (String h : hist) {
+                    user.append(h).append("\n");
+                }
+            }
+            user.append("\n");
+        }
+
+        user.append("用户上传了一张截图（来自「").append(StringUtils.hasText(page) ? page : "未知")
+                .append("」页面，尺寸 ").append(width).append("×").append(height).append("）。\n\n");
         user.append("【用户问题】").append(q).append("\n\n");
-        user.append("【该时段真实数据】\n");
-        user.append(toText(snapshot));
-        user.append("\n【要求】\n");
-        user.append("1) 先用一句话概括这段时间的总体情况（用电、异常）；\n");
-        user.append("2) 指出最值得关注的 2~3 个现象，并说明依据的数据；\n");
-        user.append("3) 给出可能原因，标注哪些是推测、需要现场核实；\n");
-        user.append("4) 给出可执行的运维建议，按优先级排列；\n");
-        user.append("5) 只描述截图中确实可见的内容，不要臆造图中没有的信息；\n");
-        user.append("6) 不要编造数据，不要给出未经数据支持的节能比例。\n");
+        user.append("【该时段真实数据】\n").append(toText(snapshot)).append("\n");
+        user.append("""
+                【回答要求】
+                1) 先读图：把截图里能看到的内容逐条写出来。
+                   - 是图表：说明图表类型、坐标轴含义、走势、峰值谷值与关键数值；
+                   - 是文字/表格/卡片：逐条抄录可见的标题、字段名与数字；
+                   - 只有真的什么都看不清时，才说「无法辨认」，不要因为不是图表就说看不清。
+                2) 再对账：把截图里的数字与上面的真实数据逐项比对，一致就确认；
+                   不一致就明确指出「图上 X，数据 Y」，并说明以哪个为准。
+                3) 再解释：基于比对结果说明这段时间发生了什么、可能的原因；
+                   推测必须标注「需现场核实」。
+                4) 最后建议：给出 3~4 条可执行的运维动作，按优先级排列。
+                5) 如果截图与建筑能源无关，直接说明「这张图与能耗数据无关」，
+                   只针对图中内容回答，不要硬套能耗结论。
+                """);
 
         String system = """
-                你是建筑能源运维分析师。用户截了一张看板/图表并提问。
-                请先描述截图里看到的关键信息（图表走势、数值、异常点），
-                再结合提供的真实数据解释原因并给建议。
-                必须区分「数据事实」与「推测原因」，推测要标注需现场核实。
-                回答控制在 350 字以内，分点，中文。""";
+                你是建筑能源运维分析师，擅长看图说话 + 数据核对。
+                先客观描述图中可见信息，再用真实数据交叉验证，最后给结论与建议。
+                禁止编造图中没有的数字；禁止把推测说成事实；中文分点作答，350 字以内。""";
 
         if (llmClient != null && llmClient.available()) {
             try {
-                String raw = llmClient.chatWithImage(system, user.toString(), dataUrl, 0.3, 900);
+                String raw = llmClient.chatWithImage(system, user.toString(), dataUrl, 0.25, 1100);
                 if (StringUtils.hasText(raw)) {
                     usedVision[0] = true;
                     return raw.trim();
                 }
             } catch (Exception e) {
-                log.warn("截图分析调用多模态模型失败，降级纯数据：{}", e.getMessage());
+                log.warn("多模态调用失败，降级纯数据：{}", e.getMessage());
             }
             try {
-                String raw = llmClient.chat(system, user.toString(), 0.3, 900);
+                String raw = llmClient.chat(system, user.toString(), 0.25, 900);
                 if (StringUtils.hasText(raw)) {
                     return raw.trim();
                 }
             } catch (Exception e) {
-                log.warn("截图分析降级纯文本也失败：{}", e.getMessage());
+                log.warn("纯文本降级也失败：{}", e.getMessage());
             }
         }
         return template(snapshot);
     }
 
     private String template(Map<String, Object> s) {
-        return "① 总体：" + s.get("dateRange") + "，用电 " + s.get("totalElectricityKwh")
-                + " kWh，异常 " + s.get("anomalyEvents") + " 起 / " + s.get("anomalyHours") + " 小时。\n"
-                + "② 关注：异常最集中的是 " + s.get("topAnomalyBuildings") + "。\n"
-                + "③ 原因：需结合现场工况核实（大模型暂不可用，未做进一步归因）。\n"
-                + "④ 建议：先核查异常时段设备启停，再评估运行策略调整。";
+        return "① 图上信息：未能调用多模态模型，未读取截图内容。\n"
+                + "② 数据核对：" + s.get("统计区间") + " 用电 " + s.get("总用电kWh")
+                + " kWh，异常 " + s.get("异常事件数") + " 起 / " + s.get("异常小时数") + " 小时。\n"
+                + "③ 原因：需现场核实（模型暂不可用，未做归因）。\n"
+                + "④ 建议：先核查异常时段设备启停与传感器状态。";
     }
 
-    @SuppressWarnings("unchecked")
     private String toText(Map<String, Object> s) {
         StringBuilder sb = new StringBuilder();
         for (Map.Entry<String, Object> e : s.entrySet()) {
@@ -253,10 +320,34 @@ public class ImageContextChatService {
         return sb.toString();
     }
 
-    /** 图片转 data URL；宽度超过 1600 时等比缩放，控制 token 与传输体积 */
-    private String toDataUrl(MultipartFile image) {
-        try (InputStream in = image.getInputStream()) {
-            BufferedImage img = ImageIO.read(in);
+    // ================================================================ 会话历史
+
+    private void remember(String sessionId, String question, String answer) {
+        if (!StringUtils.hasText(sessionId)) {
+            return;
+        }
+        List<String> list = history.computeIfAbsent(sessionId, k -> new ArrayList<>());
+        synchronized (list) {
+            list.add("用户问：" + (question == null ? "" : question));
+            list.add("助手答：" + (answer == null ? "" : truncate(answer, 400)));
+            while (list.size() > MAX_HISTORY_TURNS * 2) {
+                list.remove(0);
+            }
+        }
+        if (history.size() > 500) {
+            history.clear();
+        }
+    }
+
+    private String truncate(String s, int max) {
+        return s.length() <= max ? s : s.substring(0, max) + "…";
+    }
+
+    // ================================================================ 图片处理
+
+    private String toDataUrl(byte[] bytes) {
+        try {
+            BufferedImage img = ImageIO.read(new java.io.ByteArrayInputStream(bytes));
             if (img == null) {
                 return null;
             }
@@ -284,7 +375,7 @@ public class ImageContextChatService {
         }
     }
 
-    private String save(MultipartFile image, String ext) {
+    private String save(byte[] bytes, String ext) {
         try {
             Path base = Paths.get(uploadDir);
             if (!base.isAbsolute()) {
@@ -292,8 +383,7 @@ public class ImageContextChatService {
             }
             Files.createDirectories(base);
             String id = UUID.randomUUID().toString().replace("-", "");
-            Path target = base.resolve(id + "." + ext);
-            image.transferTo(target.toFile());
+            Files.write(base.resolve(id + "." + ext), bytes);
             return id;
         } catch (Exception e) {
             throw new BizException(ResultCode.IMPORT_FAILED, "截图保存失败：" + e.getMessage());

@@ -315,6 +315,17 @@ public class DeepSeekToolCallingService {
         }
     }
 
+    /**
+     * 把「截图提问」的一轮问答写入同一份会话历史。
+     *
+     * <p>否则图片问答与文字问答各用一套历史：用户先传图问完，再用文字追问
+     * 「刚才那栋楼怎么样」时，模型看不到前面那轮，会答"没提到具体楼栋"。
+     */
+    public void rememberExchange(String sessionId, String question, String answer) {
+        appendHistory(sessionId, "user", question);
+        appendHistory(sessionId, "assistant", answer);
+    }
+
     /** 取会话历史（去旧保新，最多 6 条），并做会话数上限清理 */
     private List<Map<String, String>> sessionHistory(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
