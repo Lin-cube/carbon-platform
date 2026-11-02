@@ -94,11 +94,12 @@
           <el-button size="small" :icon="Download" @click="downloadTemplate('energy')">
             下载能耗数据模板
           </el-button>
-          <el-button size="small" :icon="Download" @click="downloadTemplate('building')">
+          <el-button size="small" :icon="Download" title="仅作字段格式参考，当前版本台账数据不支持自动导入"
+                     @click="downloadTemplate('building')">
             下载建筑台账模板
           </el-button>
           <span class="text-dim" style="font-size: 12px">
-            模板含表头与 2 行示例，直接用 Excel 打开填写
+            能耗模板可直接导入；台账模板目前仅作格式参考（台账数据导入暂未支持自动落库）
           </span>
         </div>
 
