@@ -60,6 +60,24 @@ public class YuanbaoSearchService {
     private final RestTemplate restTemplate;
     private final ObjectMapper mapper = new ObjectMapper();
 
+    /**
+     * 相同问题的检索结果缓存。
+     *
+     * <p>元宝搜索按次计费（用户额度有限），而「暖通空调怎么用」这类通用问题
+     * 会被反复问到。缓存 12 小时，能显著减少重复消耗；同时避免同一问题
+     * 在短时间内多次刷新页面时重复请求外部接口。
+     */
+    private final java.util.Map<String, CachedSearch> cache = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long CACHE_TTL_MS = 12L * 60 * 60 * 1000;
+    private static final int CACHE_MAX = 500;
+
+    /** 累计调用次数（仅统计真正发起的外部请求，便于估算额度消耗） */
+    private final java.util.concurrent.atomic.AtomicLong callCount = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong cacheHitCount = new java.util.concurrent.atomic.AtomicLong();
+
+    private record CachedSearch(Map<String, Object> result, long at) {
+    }
+
     public YuanbaoSearchService(
             @Value("${carbon.search.yuanbao.secret-id:${YUANBAO_SECRET_ID:}}") String secretId,
             @Value("${carbon.search.yuanbao.secret-key:${YUANBAO_SECRET_KEY:}}") String secretKey,
@@ -115,6 +133,16 @@ public class YuanbaoSearchService {
             return null;
         }
         int n = Math.max(1, Math.min(limit, 20));
+
+        // 命中缓存直接返回，不消耗元宝搜索额度
+        String key = normalizeKey(query, n);
+        CachedSearch hit = cache.get(key);
+        if (hit != null && System.currentTimeMillis() - hit.at() < CACHE_TTL_MS) {
+            cacheHitCount.incrementAndGet();
+            Map<String, Object> cached = new java.util.LinkedHashMap<>(hit.result());
+            cached.put("cached", true);
+            return cached;
+        }
         try {
             ObjectNode body = mapper.createObjectNode();
             body.put("Query", query);
@@ -138,12 +166,48 @@ public class YuanbaoSearchService {
             out.put("query", query);
             out.put("count", results.size());
             out.put("results", results);
+            // 只缓存有结果的成功响应；失败不缓存，避免把空结果固化 12 小时
+            if (!results.isEmpty()) {
+                putCache(key, out);
+            }
+            long total = callCount.incrementAndGet();
+            log.info("元宝搜索调用：第 {} 次（缓存命中 {} 次），query={}，结果 {} 条",
+                    total, cacheHitCount.get(), query, results.size());
             return out;
         } catch (Exception e) {
             log.warn("元宝搜索失败（不影响内部能源查询）：{}", e.getMessage());
             return null;
         }
     }
+
+    /** 归一化查询键：去首尾空格、压缩空白、转小写，避免同一问题反复消耗额度 */
+    private String normalizeKey(String query, int n) {
+        return query.trim().replaceAll("\\s+", " ").toLowerCase() + "|" + n;
+    }
+
+    private void putCache(String key, Map<String, Object> value) {
+        if (cache.size() >= CACHE_MAX) {
+            long now = System.currentTimeMillis();
+            cache.entrySet().removeIf(e -> now - e.getValue().at() >= CACHE_TTL_MS);
+            if (cache.size() >= CACHE_MAX) {
+                cache.clear();
+            }
+        }
+        cache.put(key, new CachedSearch(value, System.currentTimeMillis()));
+    }
+
+    /** 缓存与调用次数统计（用于估算元宝搜索额度消耗） */
+    public Map<String, Object> stats() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("authMode", authMode());
+        out.put("available", available());
+        out.put("externalCalls", callCount.get());
+        out.put("cacheHits", cacheHitCount.get());
+        out.put("cacheSize", cache.size());
+        out.put("cacheTtlHours", CACHE_TTL_MS / 3600000);
+        return out;
+    }
+
 
     // ================================================================ 标准方式（TC3 签名）
 
