@@ -267,3 +267,39 @@ handle_version / verify_status / verify_at / updated_at`。
 | 固定问题（走知识库/工具） | 不受影响 |
 
 > 额度估算：5000 次，按每天 20 次不同问题 ≈ 8 个月；相同问题不再重复消耗。
+
+---
+
+## 十、线上 schema 漂移补齐（2026-11-02）
+
+### 现象
+点「诊断」后，抽屉顶部弹出两个「系统内部错误」，但内容能正常显示。
+
+### 根因
+`/api/anomalies/{id}` 与 `/api/anomalies/{id}/history` 返回 500，
+原因是线上缺表 `anomaly_handle_log`（本地处置闭环开发时建的，未同步）。
+
+### 全量排查（不再逐个踩坑）
+对 23 张表做了逐列比对，共发现 4 处漂移：
+
+| 对象 | 缺失内容 | 影响 |
+|---|---|---|
+| 表 `anomaly_handle_log` | 整表 | 抽屉处置区 500（用户可见的两个报错） |
+| 表 `energy_saving_simulation` | 整表 | 统计分析→节能模拟 500 |
+| `data_import_log` | 7 列（file_id/start_date/end_date/replaced_rows/derived_status/error_message/updated_at） | **数据导入执行必然失败**（INSERT 引用 file_id、derived_status） |
+| `ai_tool_call_log` | 3 列（prompt/completion/total_tokens） | AI 工具调用日志写入失败 |
+
+### 修复
+新增三个增量迁移：
+- `V2026_17__anomaly_handle_log.sql`
+- `V2026_18__energy_saving_simulation.sql`
+- `V2026_19__import_log_and_ai_usage_columns.sql`
+
+### 验证
+- 列级比对：本地 317 列 = 线上 317 列，**零漂移**
+- 抽屉：无错误提示，处置区与 AI 诊断记录正常显示，控制台 0 异常
+- 数据导入：上传 + 执行（dryRun）成功，batchNo 生成、3 行解析通过
+
+> 教训：本地加表/加列后必须同步成迁移脚本。
+> 本次连续两轮才发现全部漂移，应在部署后立即做一次「表 + 列」全量比对，
+> 而不是等用户报错。该比对已写入部署检查清单。
