@@ -26,6 +26,82 @@
 
     <!-- ============ 步骤 1：数据源选择 ============ -->
     <div v-show="step === 0" class="page-card wizard-step">
+
+        <!-- 导入说明：告诉用户该导什么、什么格式，避免反复试错 -->
+        <el-collapse v-model="guideOpen" class="import-guide mb-12">
+          <el-collapse-item name="what" title="① 这里能导入什么数据？（先看这个）">
+            <div class="guide-body">
+              <p><b>平台接收两类文件：</b></p>
+              <ul class="guide-list">
+                <li>
+                  <b>能耗时序数据</b>（主要用途）——每行是「某栋楼 + 某个时刻」的读数，
+                  用于能耗分析、异常检测、AI 诊断。
+                  <span class="guide-req">必须包含：建筑编号、监测时间</span>
+                </li>
+                <li>
+                  <b>建筑台账数据</b>——建筑的基础档案（面积、类型等），不带时间维度。
+                  系统会自动识别为「台账」并提示走单文件向导人工确认。
+                </li>
+              </ul>
+              <p class="guide-note">
+                碳排放不需要你导入：平台按 0.5810 kgCO₂/kWh ×（用电 + 燃气）自动计算。
+              </p>
+            </div>
+          </el-collapse-item>
+
+          <el-collapse-item name="fields" title="② 每列该写什么？（字段对照表）">
+            <div class="guide-body">
+              <el-table :data="targetFields" size="small" border class="guide-table">
+                <el-table-column prop="label" label="字段" width="130" />
+                <el-table-column prop="column" label="标准列名（可识别）" width="170" />
+                <el-table-column label="必填" width="70" align="center">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.required" type="danger" size="small" effect="plain">必填</el-tag>
+                    <span v-else class="text-dim">选填</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="unit" label="单位 / 格式" width="140" />
+                <el-table-column label="示例值" min-width="150">
+                  <template #default="{ row }">{{ sampleValue(row.column) }}</template>
+                </el-table-column>
+              </el-table>
+              <p class="guide-note">
+                列名不必完全一致：写「建筑编号 / 楼栋编号 / building_id」都能识别；
+                无法自动识别的列，在第 2 步可以手动映射。
+              </p>
+            </div>
+          </el-collapse-item>
+
+          <el-collapse-item name="format" title="③ 文件格式与常见问题">
+            <div class="guide-body">
+              <ul class="guide-list">
+                <li><b>格式</b>：CSV / XLSX / XLS；CSV 自动识别 UTF-8 与 GBK 编码。</li>
+                <li><b>大小</b>：单文件 ≤ 100MB，单次 ≤ 20 万行；超过请按月/按园区拆分。</li>
+                <li><b>表头</b>：第一行必须是列名，从第二行开始是数据。</li>
+                <li><b>时间</b>：<code>2016-01-01 00:00:00</code> 或 <code>2016-01-01 00:00</code>；
+                    Excel 日期列可直接识别。</li>
+                <li><b>电量单位</b>：统一用 kWh。若你的数据是 MWh，请先自行换算，或开启
+                    「单位一致性检查」让系统告警。</li>
+                <li><b>负值</b>：默认丢弃负值行（多为计量回退），可在第 3 步调整。</li>
+                <li><b>重复</b>：同一建筑同一时刻重复时，默认按「建筑 + 时间」去重保留最后一条。</li>
+                <li><b>空值</b>：必填列为空的行会被跳过，第 3 步可看到跳过数量与原因。</li>
+              </ul>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+
+        <div class="guide-actions mb-12">
+          <el-button size="small" :icon="Download" @click="downloadTemplate('energy')">
+            下载能耗数据模板
+          </el-button>
+          <el-button size="small" :icon="Download" @click="downloadTemplate('building')">
+            下载建筑台账模板
+          </el-button>
+          <span class="text-dim" style="font-size: 12px">
+            模板含表头与 2 行示例，直接用 Excel 打开填写
+          </span>
+        </div>
+
       <div class="page-title">步骤一 · 选择数据源</div>
 
       <el-upload ref="uploadRef" drag :auto-upload="false" :limit="1" accept=".csv,.xlsx,.xls"
@@ -450,7 +526,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { ElMessage, type UploadFile, type UploadInstance, ElMessageBox } from 'element-plus'
-import { UploadFilled, QuestionFilled } from '@element-plus/icons-vue'
+import { UploadFilled, QuestionFilled, Download } from '@element-plus/icons-vue'
 // 注意：必须用具名导出的 request()，它返回【已解包】的业务数据。
 // default 导出是裸 axios 实例（service），返回值仍裹着 {code,message,data} 一层，
 // 用它会导致 res.columns 为 undefined（实测踩过）。
@@ -609,6 +685,62 @@ async function doBatchImport() {
 
 const uploadResult = ref<UploadResult | null>(null)
 const targetFields = ref<TargetField[]>([])
+
+/** 导入说明面板默认展开，第一次进来就能看到该导什么 */
+const guideOpen = ref(['what', 'fields'])
+
+/** 字段示例值：让用户一眼看懂每个字段填什么 */
+const FIELD_SAMPLES: Record<string, string> = {
+  building_id: 'Eagle_office_Dallas',
+  site_id: 'Eagle',
+  building_type_cn: '办公楼',
+  timestamp: '2016-01-01 00:00:00',
+  electricity_kwh: '52.3',
+  hvac_kwh: '18.6',
+  water_m3: '0.8',
+  gas_kwh: '0',
+  air_temperature_c: '12.4',
+  humidity_pct: '58',
+  chw_supply_temp_c: '7.2',
+  chw_return_temp_c: '12.1',
+  occupancy_density: '2.5',
+  area_m2: '3522.6'
+}
+
+function sampleValue(column: string): string {
+  return FIELD_SAMPLES[column] || '--'
+}
+
+/**
+ * 下载导入模板。
+ * 带 UTF-8 BOM，避免 Excel 打开中文乱码。
+ */
+function downloadTemplate(kind: 'energy' | 'building') {
+  const energy = [
+    ['建筑编号', '园区编号', '监测时间', '电力能耗', '空调系统能耗', '水耗', '燃气能耗',
+      '环境温度', '相对湿度', '空调出水温度', '空调回水温度', '人员密度'],
+    ['Eagle_office_Dallas', 'Eagle', '2016-01-01 00:00:00', '52.3', '18.6', '0.8', '0', '12.4', '58', '7.2', '12.1', '2.5'],
+    ['Eagle_office_Dallas', 'Eagle', '2016-01-01 01:00:00', '49.8', '17.2', '0.8', '0', '11.9', '59', '7.1', '12.0', '2.5']
+  ]
+  const building = [
+    ['建筑编号', '园区编号', '建筑类型', '建筑面积'],
+    ['Eagle_office_Dallas', 'Eagle', '办公楼', '3522.6'],
+    ['Hog_office_Sydney', 'Hog', '办公楼', '8095']
+  ]
+  const rows = kind === 'energy' ? energy : building
+  const csv = rows.map((r) => r.join(',')).join('\n')
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = kind === 'energy' ? '能耗数据导入模板.csv' : '建筑台账导入模板.csv'
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  ElMessage.success('模板已下载，用 Excel 打开填写后上传即可')
+}
+
 const mapping = reactive<Record<string, string>>({})
 const result = ref<ImportResult | null>(null)
 const logs = ref<ImportLog[]>([])
@@ -1068,4 +1200,17 @@ onMounted(async () => {
   gap: 10px;
   margin-left: auto;
 }
+
+/* 导入说明 */
+.import-guide { border: 1px solid #e3efe8; border-radius: 12px; overflow: hidden; background: #fbfdfc; }
+.import-guide :deep(.el-collapse-item__header) { padding-left: 14px; font-weight: 600; color: #253d35; background: #f6faf8; }
+.import-guide :deep(.el-collapse-item__content) { padding: 0 14px 12px; }
+.guide-body { font-size: 13px; line-height: 1.8; color: #3f564d; }
+.guide-body p { margin: 6px 0; }
+.guide-list { margin: 6px 0; padding-left: 20px; }
+.guide-list li { margin: 4px 0; }
+.guide-req { color: #c26b62; font-weight: 600; margin-left: 6px; }
+.guide-note { margin-top: 8px; font-size: 12.5px; color: #8a9a92; }
+.guide-table { margin: 6px 0 4px; }
+.guide-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 </style>
