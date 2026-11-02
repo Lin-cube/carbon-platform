@@ -7,7 +7,7 @@
       </div>
       <div class="dash-head-sub">
         当前园区 <b>{{ app.siteId || '全部园区' }}</b> · 数据区间
-        <b>{{ range[0] }}</b> ~ <b>{{ range[1] }}</b> · 未标注为实时
+        <b>{{ range?.[0] || '--' }}</b> ~ <b>{{ range?.[1] || '--' }}</b> · 未标注为实时
       </div>
     </div>
 
@@ -27,9 +27,10 @@
         </el-select>
 
         <span class="text-dim">时间范围</span>
+        <!-- 禁用清除：清空后 range 变 null，模板里的 range[0] 会抛错导致整页白屏 -->
         <el-date-picker v-model="range" type="daterange" value-format="YYYY-MM-DD"
                         start-placeholder="开始" end-placeholder="结束" style="width: 250px"
-                        @change="onRangeChange" />
+                        :clearable="false" @change="onRangeChange" />
 
         <el-radio-group v-model="granularity" size="small" @change="loadSeries">
           <el-radio-button value="daily">日</el-radio-button>
@@ -158,8 +159,8 @@
       <AiInsight
         scope="dashboard"
         title="AI 能源洞察"
-        :start-date="range[0]"
-        :end-date="range[1]"
+        :start-date="range?.[0]"
+        :end-date="range?.[1]"
         :site-id="app.siteId"
         :building-type="app.buildingType"
         @focus-building="onFocusBuilding"
@@ -257,7 +258,10 @@ function onRangeChange(v: [string, string] | null) {
   if (v && v.length === 2) {
     app.setRange(v[0], v[1])
     loadAll()
+    return
   }
+  // 清除按钮已禁用；这里再兜一层，防止程序化清空后 range 为 null 导致白屏
+  range.value = [app.startDate, app.endDate]
 }
 
 // ---------------------------------------------------------------- 图表配色（与浅色设计系统协调）

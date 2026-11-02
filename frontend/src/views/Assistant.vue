@@ -141,8 +141,8 @@
           <el-option v-for="b in buildings" :key="b.buildingId"
                       :label="`${b.buildingId}（${b.buildingTypeCn || '未分类'}）`" :value="b.buildingId" />
         </el-select>
-        <el-date-picker v-model="ctxRange" type="daterange" value-format="YYYY-MM-DD" size="small"
-                        start-placeholder="开始" end-placeholder="结束" style="width: 230px" />
+          <el-date-picker v-model="ctxRange" type="daterange" value-format="YYYY-MM-DD" size="small" :clearable="false"
+                          start-placeholder="开始" end-placeholder="结束" style="width: 230px" />
         <span v-if="!ctxBuildingId && !ctxRange" class="text-dim" style="font-size: 12px">
           不选则由后端按问题文本自动解析
         </span>
