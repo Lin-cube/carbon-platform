@@ -55,6 +55,24 @@ public class DataImportService {
     private final com.carbon.platform.ai.service.DashboardInsightService dashboardInsightService;
     /** 导入后让相关 AI 诊断失效，避免展示过期结论 */
     private final com.carbon.platform.analytics.diagnosis.AnomalyDiagnosisService anomalyDiagnosisService;
+
+
+    /**
+     * 派生数据（异常重算 → 聚合刷新 → 评级）后台线程池。
+     *
+     * <p>实测：导入 1 个月 2234 行，写事实数据只需 1~2 秒，
+     * 但异常重算写回要 35 秒——瓶颈是 2234 次带 8 个索引的 UPDATE
+     * 在冷缓存下的随机磁盘写，属于硬件限制。
+     *
+     * <p>因此放到后台跑，接口立即返回「已入库，后台分析中」。
+     * 单线程执行器避免多次导入并发重算同一批建筑。
+     */
+    private final java.util.concurrent.ExecutorService derivedExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread th = new Thread(r, "import-derived");
+                th.setDaemon(true);
+                return th;
+            });
     /** 编程式事务：用于「按块提交」，不用 @Transactional 把整次导入包成长事务 */
     private final org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
@@ -667,33 +685,39 @@ public class DataImportService {
             if (minDate != null) {
                 result.setStartDate(minDate.toString());
                 result.setEndDate(maxDate == null ? minDate.toString() : maxDate.toString());
-                java.util.Map<String, Object> aggReport = new java.util.LinkedHashMap<>();
-                boolean derivedOk = true;
-                String derivedErr = null;
-                try {
-                    // 顺序：异常 → 聚合 → 评级。先重算异常，聚合才有正确的 anomaly_hours。
-                    aggReport.put("anomaly", anomalyDetectionService.recompute(affectedBuildings, minDate, maxDate));
-                    aggReport.putAll(aggregateRefreshService.refresh(affectedBuildings, minDate, maxDate));
-                    aggReport.put("regrade", aggregateRefreshService.regrade(affectedBuildings));
-                    // refresh() 内部吞异常并写入 error，需要显式判定
-                    if (aggReport.get("error") != null) {
-                        derivedOk = false;
-                        derivedErr = String.valueOf(aggReport.get("error"));
+
+                // 派生数据转后台：异常重算写回约 35 秒（2234 次带 8 索引的 UPDATE），
+                // 阻塞用户没有意义。事实数据此时已落库，接口可以立刻返回。
+                final java.util.Set<String> blds = new java.util.LinkedHashSet<>(affectedBuildings);
+                final java.time.LocalDate from = minDate;
+                final java.time.LocalDate to = maxDate == null ? minDate : maxDate;
+                final String batchNo2 = result.getBatchNo();
+                derivedExecutor.submit(() -> {
+                    long t0 = System.currentTimeMillis();
+                    try {
+                        anomalyDetectionService.recompute(blds, from, to);
+                        long tB = System.currentTimeMillis();
+                        aggregateRefreshService.refresh(blds, from, to);
+                        long tC = System.currentTimeMillis();
+                        aggregateRefreshService.regrade(blds);
+                        long tD = System.currentTimeMillis();
+                        log.info("批次 {} 后台派生完成：异常重算 {}ms，聚合刷新 {}ms，评级 {}ms",
+                                batchNo2, tB - t0, tC - tB, tD - tC);
+                        try {
+                            com.carbon.platform.common.controller.HealthController.invalidateOverviewCache();
+                            dashboardInsightService.invalidate();
+                            anomalyDiagnosisService.invalidate(blds, from, to, "数据导入 " + batchNo2);
+                        } catch (Exception ignore) {
+                            // 缓存失效失败不影响结果
+                        }
+                    } catch (Exception e) {
+                        log.error("批次 {} 后台派生失败（事实数据已落库，可手动重算）：{}",
+                                batchNo2, e.getMessage(), e);
                     }
-                } catch (Exception e) {
-                    derivedOk = false;
-                    derivedErr = String.valueOf(e.getMessage());
-                    aggReport.put("error", derivedErr);
-                    log.error("派生数据刷新失败（事实数据已落库，可重算）", e);
-                }
-                result.setAggregateRefresh(aggReport);
-                result.setDerivedStatus(derivedOk ? "OK" : "FAILED");
-                if (!derivedOk) {
-                    // 保留基础状态（成功/部分成功）再追加后缀，
-                    // 否则重算后去掉后缀会退化成「部分成功」（实测踩过）
-                    result.setStatus(result.getStatus() + "（派生数据待重算）");
-                    log.warn("批次 {} 派生数据待重算：{}", result.getBatchNo(), derivedErr);
-                }
+                });
+                result.setDerivedStatus("PENDING");
+                result.setStatus(result.getStatus() + "（后台分析中）");
+                log.info("批次 {} 事实数据已入库，派生计算转后台", result.getBatchNo());
             }
 
             // ── 阶段 4：缓存失效 + 收尾 ──

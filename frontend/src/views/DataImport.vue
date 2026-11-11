@@ -570,6 +570,8 @@ interface ImportResult {
   dryRun: boolean
   startDate?: string
   endDate?: string
+  derivedStatus?: string
+  aggregateRefresh?: Record<string, unknown>
 }
 interface ImportLog {
   id: number
@@ -954,11 +956,18 @@ async function autoSwitchRange(res?: ImportResult) {
   }
 
   try {
+    // 派生分析（异常重算/聚合/评级）转后台：一个月数据约 30~60 秒，
+    // 期间看板异常数可能还没更新，必须提前说明。
+    const asyncNote = res?.derivedStatus === 'PENDING'
+      ? `\n\n⚠️ 异常分析与聚合正在后台进行（约 30~60 秒）。` +
+        `期间看板的异常数可能暂时不变，稍后刷新即可看到完整结果。`
+      : ''
     await ElMessageBox.confirm(
       `本批次数据覆盖 ${start} 至 ${end}。` +
       (overlap
         ? `当前时间范围已包含该区间，未做改动。`
         : `已自动把全局时间范围切换到该区间。`) +
+      asyncNote +
       `\n\n是否前往监控看板查看新数据？`,
       '导入成功',
       { type: 'success', confirmButtonText: '前往看板', cancelButtonText: '留在本页' }

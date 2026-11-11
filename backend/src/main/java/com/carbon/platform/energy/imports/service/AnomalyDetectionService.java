@@ -103,12 +103,14 @@ public class AnomalyDetectionService {
 
     /** @return {evaluatedHours, anomalyHours, eventCount} */
     private int[] recomputeOne(String bid, LocalDate start, LocalDate end) {
+        long t0 = System.currentTimeMillis();
         LocalDate histStart = start.minusDays(LOOKBACK_DAYS);
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
                 "SELECT ts, electricity_kwh FROM fact_energy_hourly "
                         + "WHERE building_id = ? AND ts >= ? AND ts <= ? ORDER BY ts",
                 bid, Timestamp.valueOf(histStart.atStartOfDay()),
                 Timestamp.valueOf(end.atTime(23, 59, 59)));
+        long tHist = System.currentTimeMillis();
         if (rows.isEmpty()) {
             return new int[]{0, 0, 0};
         }
@@ -269,6 +271,7 @@ public class AnomalyDetectionService {
             updates.add(new Object[]{flag, type, sev, round(base[i], 4), round(z, 3), dq, dqt,
                     bid, Timestamp.valueOf(ts)});
         }
+        long tCalc = System.currentTimeMillis();
         if (!updates.isEmpty()) {
             jdbcTemplate.batchUpdate(
                     "UPDATE fact_energy_hourly SET anomaly_flag=?, anomaly_type=?, severity=?, "
@@ -278,8 +281,13 @@ public class AnomalyDetectionService {
         }
 
         // ⑦ 先重建事件，再重建日聚合（日聚合要统计 event_count，顺序不能反）
+        long tUpd = System.currentTimeMillis();
         int events = rebuildEvents(bid, start, end);
+        long tEv = System.currentTimeMillis();
         rebuildDailyAgg(bid, start, end);
+        long tAgg = System.currentTimeMillis();
+        log.info("重算分段[{}]：取数 {}ms，基线计算 {}ms，写回 {}ms，事件重建 {}ms，日聚合 {}ms",
+                bid, tHist - t0, tCalc - tHist, tUpd - tCalc, tEv - tUpd, tAgg - tEv);
         return new int[]{evaluated, anomaly, events};
     }
 
@@ -291,38 +299,54 @@ public class AnomalyDetectionService {
                 "SELECT site_id FROM dim_building WHERE building_id = ?",
                 rs -> rs.next() ? rs.getString(1) : null, bid);
 
+        Timestamp from = Timestamp.valueOf(start.atStartOfDay());
+        Timestamp to = Timestamp.valueOf(end.plusDays(1).atStartOfDay());
+
         jdbcTemplate.update(
                 "DELETE FROM agg_anomaly_daily WHERE building_id = ? AND stat_date BETWEEN ? AND ?",
                 bid, start, end);
 
+        // ★ 性能修复：原实现按「每天」循环做 2 查 1 写，
+        //   一次导入 31 天 × 4 栋 = 372 次数据库往返，在 2 核云主机上
+        //   单次约 110ms，累计 40 秒（慢查询日志里没有超过 1s 的语句，
+        //   说明不是某条 SQL 慢，而是往返次数太多）。
+        //   改为一次 GROUP BY 写入，再用一次 GROUP BY 补事件数。
+        jdbcTemplate.update("""
+                INSERT INTO agg_anomaly_daily
+                  (building_id, site_id, stat_date, stat_year, stat_month,
+                   evaluated_hours, anomaly_hours, quality_hours, event_count)
+                SELECT building_id, ?, stat_date, stat_year, stat_month,
+                       SUM(CASE WHEN anomaly_flag >= 0 THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN anomaly_flag = 1 THEN 1 ELSE 0 END),
+                       SUM(CASE WHEN data_quality_flag = 1 THEN 1 ELSE 0 END),
+                       0
+                  FROM fact_energy_hourly
+                 WHERE building_id = ? AND ts >= ? AND ts < ?
+                 GROUP BY stat_date, stat_year, stat_month
+                """, siteId, bid, from, to);
+
+        List<Map<String, Object>> evRows = jdbcTemplate.queryForList("""
+                SELECT DATE(start_ts) AS d, COUNT(*) AS c
+                  FROM fact_anomaly_event
+                 WHERE building_id = ? AND start_ts >= ? AND start_ts < ?
+                 GROUP BY DATE(start_ts)
+                """, bid, from, to);
+
         int eventTotal = 0;
-        LocalDate d = start;
-        while (!d.isAfter(end)) {
-            Map<String, Object> agg = jdbcTemplate.queryForMap(
-                    "SELECT "
-                            + " SUM(CASE WHEN anomaly_flag >= 0 THEN 1 ELSE 0 END) AS eval, "
-                            + " SUM(CASE WHEN anomaly_flag = 1 THEN 1 ELSE 0 END) AS anom, "
-                            + " SUM(CASE WHEN data_quality_flag = 1 THEN 1 ELSE 0 END) AS qual "
-                            + "FROM fact_energy_hourly WHERE building_id = ? AND ts >= ? AND ts < ?",
-                    bid, Timestamp.valueOf(d.atStartOfDay()), Timestamp.valueOf(d.plusDays(1).atStartOfDay()));
-            int eval = toInt(agg.get("eval"));
-            int anom = toInt(agg.get("anom"));
-            int qual = toInt(agg.get("qual"));
-            int evCount = toInt(jdbcTemplate.queryForObject(
-                    "SELECT COUNT(*) FROM fact_anomaly_event WHERE building_id = ? "
-                            + "AND start_ts >= ? AND start_ts < ?",
-                    Integer.class, bid, Timestamp.valueOf(d.atStartOfDay()),
-                    Timestamp.valueOf(d.plusDays(1).atStartOfDay())));
-            eventTotal += evCount;
-            jdbcTemplate.update(
-                    "INSERT INTO agg_anomaly_daily(building_id, site_id, stat_date, stat_year, stat_month, "
-                            + "evaluated_hours, anomaly_hours, quality_hours, event_count) "
-                            + "VALUES (?,?,?,?,?,?,?,?,?)",
-                    bid, siteId, d, d.getYear(), d.getMonthValue(), eval, anom, qual, evCount);
-            d = d.plusDays(1);
+        List<Object[]> upd = new ArrayList<>();
+        for (Map<String, Object> r : evRows) {
+            int c = toInt(r.get("c"));
+            eventTotal += c;
+            upd.add(new Object[]{c, bid, r.get("d")});
+        }
+        if (!upd.isEmpty()) {
+            jdbcTemplate.batchUpdate(
+                    "UPDATE agg_anomaly_daily SET event_count = ? WHERE building_id = ? AND stat_date = ?",
+                    upd);
         }
         return eventTotal;
     }
+
 
     /** 用 anomaly_flag=1 的小时重建异常事件（连续小时合并为一次事件） */
     private int rebuildEvents(String bid, LocalDate start, LocalDate end) {
